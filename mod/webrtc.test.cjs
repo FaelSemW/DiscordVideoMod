@@ -51,14 +51,14 @@ test('native fallback uses getDesktopCaptureSources and honors selected window',
 });
 
 test('capture failure preserves original display error', async () => {
-  const s = service({ window: {}, navigator: {mediaDevices:{async getDisplayMedia(){throw new Error('display denied');}}} });
+  const s = service({ window: {__zapCaptureSourceId:'screen:0:0'}, navigator: {mediaDevices:{async getDisplayMedia(){throw new Error('display denied');}}} });
   await assert.rejects(s.startScreenCapture(), /getDisplayMedia: Error: display denied/);
 });
 
 test('desktop audio failure retries video only and emits a warning', async () => {
   const requests = [], warnings = [];
   const stream = { getVideoTracks: () => [{addEventListener(){}}] };
-  const s = service({window:{DiscordNative:{desktopCapture:{async getDesktopCaptureSources(){return [{id:'screen:0:0'}];}}}},navigator:{mediaDevices:{async getUserMedia(request){requests.push(request); if(request.audio)throw Error('loopback unavailable'); return stream;}}}});
+  const s = service({window:{__zapCaptureSourceId:'screen:0:0',DiscordNative:{desktopCapture:{async getDesktopCaptureSources(){return [{id:'screen:0:0'}];}}}},navigator:{mediaDevices:{async getUserMedia(request){requests.push(request); if(request.audio)throw Error('loopback unavailable'); return stream;}}}});
   s.on('statusChange', event => warnings.push(event));
   assert.equal(await s.startScreenCapture(),stream);
   assert.equal(requests.length,2); assert.equal(requests[1].audio,false);
@@ -91,4 +91,32 @@ test('stop during capture cancels late announcement', async () => {
   const pending = s.startBroadcast('room', 'host'); await started;
   s.stopBroadcast(); complete(); await assert.rejects(pending, /cancelada/);
   assert.equal(stopped, true); assert.equal(s.messages.length, 0);
+});
+
+test('no selection cannot silently capture the first monitor', async () => {
+  let captured=false;
+  const s=service({window:{},navigator:{mediaDevices:{async getDisplayMedia(){captured=true;}}}});
+  await assert.rejects(s.startScreenCapture(), /Selecione/); assert.equal(captured,false);
+});
+test('duplicate subscriber does not tear down a negotiating peer', async () => {
+  const s=service(); s.localStream={getTracks:()=>[]};
+  await s.createBroadcasterPeerConnection('viewer'); const pc=s.broadcasterPcs.get('viewer');
+  await s.createBroadcasterPeerConnection('viewer');
+  assert.equal(s.broadcasterPcs.get('viewer'),pc);
+  assert.equal(s.messages.filter(m=>m.type==='stream:offer').length,1);
+  s.stopBroadcast(); assert.equal(s.peerTimers.size,0);
+});
+test('channel change resumes viewing; manually stopped viewer ignores late offers', async () => {
+  const s=service(); s.activeChannelId='old'; await s.subscribeToStream('new','viewer');
+  assert.equal(s.viewingPaused,false);
+  s.stopViewing(); await s.handleIncomingOffer({type:'offer',sdp:'late'},'host');
+  assert.equal(s.viewerPc,null);
+});
+test('failed peer gives explicit network error and removes dead player', async () => {
+  const s=service();const errors=[],stops=[];
+  s.on('statusChange',e=>errors.push(e)); s.on('streamStopped',e=>stops.push(e));
+  await s.handleIncomingOffer({type:'offer',sdp:'offer'},'host');
+  const pc=s.viewerPc; pc.connectionState='failed';pc.onconnectionstatechange();
+  assert.equal(s.viewerPc,null);assert.equal(stops.length,1);
+  assert.match(errors.at(-1).message,/TURN/);assert.equal(s.peerTimers.size,0);
 });

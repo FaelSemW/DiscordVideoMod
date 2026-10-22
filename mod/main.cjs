@@ -29,6 +29,15 @@ if (!global.__rafaVideoTestLoaded) {
     } catch (e) {}
   }
 
+  let loadedIceServers = null;
+  // This endpoint is public configuration; never include credentials in diagnostics.
+  fetchUpdatePayload('https://zaprecovery.online/api/ice').then(data => {
+    if (Array.isArray(data?.iceServers)) {
+      const valid = data.iceServers.filter(server => server && [].concat(server.urls || []).length && [].concat(server.urls || []).every(url => typeof url === 'string' && /^(stun|turn|turns):/.test(url)));
+      if (valid.length) loadedIceServers = valid;
+    }
+  });
+
   // --- Auto-Updater Client Logic ---
   function fetchUpdatePayload(targetUrl, timeoutMs = 5000) {
     return new Promise((resolve) => {
@@ -148,10 +157,10 @@ if (!global.__rafaVideoTestLoaded) {
               if (sources && sources.length > 0) {
                 let selected;
                 try { selected = await request.frame.executeJavaScript('window.__zapCaptureSourceId || null'); } catch {}
-                const target = selected ? sources.find(s => s.id === selected) : sources.find(s => s.id.startsWith('screen:')) || sources[0];
+                const target = selected && sources.find(s => s.id === selected);
                 if (!target) { log('capture-source-unavailable'); callback({}); return; }
                 log('capturing-source', { id: target.id, name: target.name });
-                callback({ video: target, audio: 'loopback' });
+                callback({ video: target, ...(request.audioRequested ? { audio: 'loopback' } : {}) });
               } else {
                 callback({});
               }
@@ -218,6 +227,7 @@ if (!global.__rafaVideoTestLoaded) {
 
           const candidate = await frame.executeJavaScript(
             `window.__DISCORD_MOD_VERSION__ = ${JSON.stringify(currentVer)};\n` +
+            `window.__DISCORD_MOD_ICE_SERVERS__ = ${JSON.stringify(loadedIceServers)};\n` +
             webrtcServiceJs + '\n' +
             rendererSource
               .replace('__RAFA_ENABLED__', JSON.stringify(enabled))

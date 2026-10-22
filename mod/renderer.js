@@ -29,156 +29,64 @@
     );
   }
 
-  // --- 1. Injeção de Estilos Globais Anti-Erro 2012 e Ajuste do Player ---
-  if (typeof document !== 'undefined' && !document.getElementById('zap-native-stream-fix')) {
-    const style = document.createElement('style');
-    style.id = 'zap-native-stream-fix';
-    style.textContent = `
-      /* Oculta mensagens oficiais de Erro 2012 e transmissão pausada */
-      /* Assegura que o elemento de vídeo customizado ocupe o layout completo */
-      #zap-custom-video-player {
-        position: absolute !important;
-        inset: 0 !important;
-        width: 100% !important;
-        height: 100% !important;
-        object-fit: contain !important;
-        background-color: #000000 !important;
-        z-index: 45 !important;
-        display: block !important;
-        pointer-events: auto !important;
-      }
-      div[class*="videoWrapper_"] video:not(#zap-custom-video-player),
-      div[class*="videoContainer_"] video:not(#zap-custom-video-player),
-      div[class*="tile_"] video:not(#zap-custom-video-player) {
-        object-fit: contain !important;
-        width: 100% !important;
-        height: 100% !important;
-      }
-    `;
-    if (document.head) document.head.appendChild(style);
-  }
-
-  // --- 2. Localização e Injeção no DOM do Discord (Player Nativo) ---
-  function findStreamContainer() {
-    if (typeof document === 'undefined') return null;
-
-    // 1. Procura por container com badge "AO VIVO" ou "LIVE"
-    const liveTile = document.querySelector('[class*="tile_"]:has([class*="live_"], [class*="liveBadge_"], [class*="stream_"])');
-    if (liveTile) return liveTile;
-
-    // 2. Video wrapper padrão do Discord
-    const videoWrapper = document.querySelector('[class*="videoWrapper_"], [class*="videoContainer_"]');
-    if (videoWrapper) return videoWrapper;
-
-    // 3. Procura o maior tile ativo na chamada (largura > 250px e altura > 150px)
-    const tiles = Array.from(document.querySelectorAll('[class*="tile_"], [class*="wrapper_"]'))
-      .filter(el => el.offsetWidth > 250 && el.offsetHeight > 150);
-    if (tiles.length > 0) {
-      tiles.sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight));
-      return tiles[0];
+  // A dedicated surface survives Discord tile remounts and never hides native errors.
+  function mediaPanel() {
+    let panel = document.getElementById('zap-media-panel');
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.id = 'zap-media-panel';
+      panel.style.cssText = 'position:fixed;right:20px;bottom:90px;width:min(720px,80vw);background:#151515;padding:12px;border-radius:10px;z-index:10000;color:white';
+      const title = document.createElement('div');
+      title.textContent = 'Transmissão do mod';
+      panel.appendChild(title);
+      const video = document.createElement('video');
+      video.id = 'zap-custom-video-player';
+      video.autoplay = true; video.playsInline = true; video.controls = true;
+      video.style.cssText = 'width:100%;max-height:65vh;object-fit:contain;background:black';
+      panel.appendChild(video);
+      const status = document.createElement('div'); status.id = 'zap-playback-status';
+      panel.appendChild(status);
+      const stop = document.createElement('button'); stop.textContent = 'Fechar / parar transmissão';
+      stop.onclick = () => {
+        const service = window.__zapWebRTCInstance;
+        if (service?.localStream) service.stopBroadcast();
+        else { service?.stopViewing(); window.__zapViewingPaused = true; }
+        detachStreamFromNativePlayer();
+      };
+      panel.appendChild(stop);
+      document.body.appendChild(panel);
     }
-
-    // 4. Container geral da chamada
-    const callContainer = document.querySelector('[class*="callContainer_"]');
-    if (callContainer) return callContainer;
-
-    // 5. Janela separada (Popout)
-    const popoutMount = document.querySelector('#app-mount') || document.body;
-    return popoutMount;
-  }
-
-  function applyStreamToVideo(video, stream, isLocal = false) {
-    if (!video || !stream) return;
-    if (video.srcObject !== stream) {
-      video.srcObject = null;
-      video.srcObject = stream;
-    }
-    if (video.dataset.zapLocal !== String(isLocal)) {
-      video.muted = isLocal;
-      video.volume = isLocal ? 0 : 1.0;
-      video.dataset.zapLocal = String(isLocal);
-    }
-    video.autoplay = true;
-    video.playsInline = true;
-
-    video.style.setProperty('display', 'block', 'important');
-    video.style.setProperty('visibility', 'visible', 'important');
-    video.style.setProperty('opacity', '1', 'important');
-    video.style.setProperty('z-index', '45', 'important');
-    video.style.setProperty('position', 'absolute', 'important');
-    video.style.setProperty('top', '0', 'important');
-    video.style.setProperty('left', '0', 'important');
-    video.style.setProperty('width', '100%', 'important');
-    video.style.setProperty('height', '100%', 'important');
-    video.style.setProperty('object-fit', 'contain', 'important');
-    video.style.setProperty('background-color', '#000000', 'important');
-
-    video.play().catch(e => console.warn('[DiscordMod] Video.play aviso:', e));
-
-    // Oculta spinners e overlays que cobrem o vídeo na mesma célula/tile
-    const parent = video.parentElement;
-    if (parent) {
-      const overlays = parent.querySelectorAll(`
-        [class*="loading_"],
-        [class*="spinner_"],
-        [class*="loadingWrapper_"],
-        [class*="loadingContainer_"],
-        [class*="streamPaused_"],
-        [class*="videoOverlay_"],
-        [class*="emptyState_"],
-        [class*="streamNotice_"],
-        div[role="alert"]
-      `);
-      overlays.forEach(el => {
-        if (el !== video && !el.contains(video)) {
-          el.style.setProperty('display', 'none', 'important');
-          el.style.setProperty('opacity', '0', 'important');
-          el.style.setProperty('pointer-events', 'none', 'important');
-        }
-      });
-    }
+    return panel;
   }
 
   function attachStreamToNativePlayer(stream, isLocal = false) {
     if (!stream || typeof document === 'undefined') return;
-    if (!isLocal) {
-      window.__activeMediaStream = stream;
-    } else {
-      window.__localMediaStream = stream;
-    }
-
-    // Localiza ou cria o elemento de vídeo customizado no container da transmissão
-    const container = findStreamContainer();
-    if (container) {
-      if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
-      let customPlayer = document.getElementById('zap-custom-video-player');
-      if (!customPlayer) {
-        customPlayer = document.createElement('video');
-        customPlayer.id = 'zap-custom-video-player';
-        customPlayer.autoplay = true;
-        customPlayer.playsInline = true;
-        customPlayer.controls = true;
-      }
-      if (customPlayer.parentElement !== container) {
-        container.appendChild(customPlayer);
-      }
-      applyStreamToVideo(customPlayer, stream, isLocal);
-    }
-
+    if (isLocal) { window.__localMediaStream = stream; window.__activeMediaStream = null; }
+    else { window.__activeMediaStream = stream; window.__zapViewingPaused = false; }
+    mediaPanel();
+    const video = document.getElementById('zap-custom-video-player');
+    if (video.srcObject === stream) return;
+    video.srcObject = stream;
+    video.muted = isLocal;
+    const status = document.getElementById('zap-playback-status');
+    status.textContent = 'Aguardando o primeiro quadro de vídeo…';
+    video.onloadeddata = () => { status.textContent = 'Vídeo recebido'; };
+    video.onwaiting = () => { status.textContent = 'Aguardando dados de vídeo…'; };
+    video.onerror = () => { status.textContent = 'Falha na reprodução. Feche e conecte novamente.'; };
+    video.play().catch(async () => {
+      // Autoplay with sound may be blocked: keep video visible and expose audio control.
+      video.muted = true;
+      try { await video.play(); status.textContent = 'Vídeo sem som. Ative o áudio nos controles do vídeo.'; }
+      catch { status.textContent = 'Clique em reproduzir nos controles do vídeo.'; }
+    });
   }
 
   function detachStreamFromNativePlayer() {
+    window.__activeMediaStream = null; window.__localMediaStream = null;
     if (typeof document === 'undefined') return;
-    window.__activeMediaStream = null;
-    window.__localMediaStream = null;
-    if (window.__zapAudioPlayer) {
-      try { window.__zapAudioPlayer.srcObject = null; } catch {}
-    }
-    const customPlayer = document.getElementById('zap-custom-video-player');
-    if (customPlayer) {
-      try { customPlayer.srcObject = null; } catch {}
-      customPlayer.remove();
-    }
+    const player = document.getElementById('zap-custom-video-player');
+    if (player) player.srcObject = null;
+    document.getElementById('zap-media-panel')?.remove();
   }
 
   // --- 3. Inicializa WebRTCService desacoplado ---
@@ -201,52 +109,13 @@
 
     service.on('remoteStream', (stream) => {
       console.log('[DiscordMod] Novo stream remoto recebido via WebRTCService! Renderizando...');
-      attachStreamToNativePlayer(stream, false);
+      if (!window.__zapViewingPaused) attachStreamToNativePlayer(stream, false);
     });
 
     service.on('streamStopped', () => {
       console.log('[DiscordMod] Transmissão remota encerrada.');
       detachStreamFromNativePlayer();
     });
-  }
-
-  // --- 4. Observador contínuo de montagem de nós no DOM ---
-  if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined' && !window.__zapVideoObserver) {
-    window.__zapVideoObserver = new MutationObserver(() => {
-      const activeStream = window.__activeMediaStream;
-      const localStream = window.__localMediaStream;
-      const streamToApply = activeStream || localStream;
-      const isLocal = !activeStream && Boolean(localStream);
-
-      if (streamToApply) {
-        attachStreamToNativePlayer(streamToApply, isLocal);
-
-        // Oculta continuamente overlays de carregamento e banners
-        const overlays = document.querySelectorAll('[class*="loadingWrapper_"], [class*="spinner_"], [class*="streamPaused_"]');
-        overlays.forEach(el => {
-          if (!el.querySelector('video') && el.tagName !== 'VIDEO') {
-            el.style.setProperty('display', 'none', 'important');
-            el.style.setProperty('opacity', '0', 'important');
-          }
-        });
-      }
-
-      // Limpeza contínua de banners de Erro 2012
-      const errorBoxes = document.querySelectorAll('div[role="alert"], [class*="streamPaused_"], div[class*="emptyState_"], div[class*="streamNotice_"]');
-      errorBoxes.forEach(el => {
-        const text = el.textContent || '';
-        if (!el.querySelector('video') && (text.includes('2012') || text.includes('transmissao nao iniciou') || el.className?.includes?.('streamPaused_'))) {
-          el.remove();
-        }
-      });
-    });
-
-    if (document.body) {
-      window.__zapVideoObserver.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
-    }
   }
 
   // --- 5. Interceptação do Webpack / Apex Experiments / Dispatcher ---
@@ -331,7 +200,7 @@
     return null;
   }
 
-  if (!dispatcher || !store) return { status: 'waiting-dispatcher-store' };
+
 
   // Desbloqueia experimentos de desenvolvedor (1080p60 nativo)
   let devUnlocked = false;
@@ -354,10 +223,10 @@
   // Override Video Guard experiment to variant -1
   const appliedList = [];
   for (const experimentName of targetExperiments) {
-    const previous = store.getClientOverrides()?.[experimentName];
+    const previous = store?.getClientOverrides?.()?.[experimentName];
     if (enabled) {
       if (previous?.variantId !== -1) {
-        dispatcher.dispatch({
+        dispatcher?.dispatch({
           type: 'APEX_EXPERIMENT_OVERRIDE_CREATE',
           experimentName,
           variantId: -1
@@ -399,125 +268,92 @@
     try { dispatcher.subscribe('APEX_EXPERIMENTS_FETCH_SUCCESS', reapply); } catch {}
   }
 
-  // Interceptação do Dispatcher de eventos
-  if (dispatcher && !window.__zapDispatcherIntercepted) {
-    window.__zapDispatcherIntercepted = true;
-    const handleStreamEvent = function (event) {
-      if (!window.__zapEnabled) return;
-      if (!event || typeof event !== 'object') {
-        return;
-      }
-
-      const service = window.__zapWebRTCInstance;
-      window.__zapLastEvent = { type: event.type, fields: Object.keys(event), at: Date.now() };
-      const voiceChannelId = event.channelId ||
-        (event.streamKey ? event.streamKey.split(':')[2] : null) ||
-        getActiveVoiceChannelId();
-      const user = currentUser();
-
-      // Início de transmissão nativa (Go Live)
-      if (
-        event.type === 'STREAM_START' ||
-        event.type === 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE'
-      ) {
-        const hasSource = event.type === 'STREAM_START' ||
-          Boolean(event.desktopDescription?.id || event.sourceId || event.desktopDescription);
-        const targetChannelId = event.channelId || voiceChannelId;
-        console.log('[DiscordMod Dispatcher] Go Live acionado:', event.type, 'channelId:', targetChannelId);
-        if (service && targetChannelId && user) {
-          if (hasSource) {
-            window.__zapCaptureSourceId = event.desktopDescription?.id || event.sourceId || window.__zapCaptureSourceId || null;
-            service.startBroadcast(targetChannelId, user.id)
-              .then(stream => {
-                console.log('[DiscordMod] Transmissão iniciada! Vinculando preview local no player...');
-                attachStreamToNativePlayer(stream, true);
-              })
-              .catch(err => {
-                window.__zapLastError = { stage: 'capture', message: String(err?.message || err), at: Date.now() };
-                showStreamError('Não foi possível iniciar a transmissão: ' + String(err?.message || err));
-                console.error('[DiscordMod] Falha ao iniciar transmissão no WebRTCService:', err);
-              });
-          } else {
-            service.stopBroadcast();
-            detachStreamFromNativePlayer();
-          }
-        }
-      }
-
-      // Encerramento de transmissão do usuário local
-      if (event.type === 'STREAM_STOP') {
-        if (event.streamKey && user?.id && event.streamKey.endsWith(user.id)) {
-          console.log('[DiscordMod Dispatcher] Transmissão local finalizada.');
-          if (service) service.stopBroadcast();
-          detachStreamFromNativePlayer();
-        }
-      }
-
-      // Intercepta clique para assistir stream de participante
-      if (event.type === 'STREAM_WATCH') {
-        console.log('[DiscordMod Dispatcher] Pedido para assistir stream. Canal:', voiceChannelId);
-        if (service && voiceChannelId && user) {
-          service.subscribeToStream(voiceChannelId, user.id);
-        }
-      }
-
-      // Saída do canal de voz
-      if (event.type === 'VOICE_CHANNEL_SELECT' && !event.channelId) {
-        console.log('[DiscordMod Dispatcher] Usuário saiu do canal de voz.');
-        if (service) {
-          service.leaveChannel();
-          service.stopBroadcast();
-          detachStreamFromNativePlayer();
-        }
-      }
-
-      // Suprime Erro 2012 oficial e estados de desconexão bloqueada
-      if (
-        (event.type === 'RTC_CONNECTION_STATE' && event.errorCode === 2012) ||
-        (event.type === 'MEDIA_ENGINE_CONNECTION_STATE' && event.errorCode === 2012)
-      ) {
-        console.warn('[DiscordMod Dispatcher] Suprimido disparo de Erro 2012 oficial:', event.type);
-        return;
-      }
-
-    };
-    if (typeof dispatcher.subscribe === 'function') {
-      for (const type of ['STREAM_START', 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE', 'STREAM_STOP', 'STREAM_WATCH', 'VOICE_CHANNEL_SELECT']) {
-        dispatcher.subscribe(type, event => {
-          // Flux dispatch must finish before capture or subscription can dispatch again.
-          Promise.resolve().then(() => handleStreamEvent({ ...event, type })).catch(error => {
-            window.__zapLastError = { stage: 'event', message: String(error.message), at: Date.now() };
-          });
-        });
-      }
-    } else {
-      window.__zapDispatcherIntercepted = false;
+  async function openCapturePicker() {
+    if (!window.__zapEnabled) return;
+    if (document.getElementById('zap-capture-picker')) return;
+    const service = window.__zapWebRTCInstance;
+    if (service?.localStream || service?.startPromise) {
+      service.stopBroadcast(); detachStreamFromNativePlayer(); return;
     }
+    if (!service || service.ws?.readyState !== 1) {
+      showStreamError('Servidor de transmissão desconectado. Aguarde a reconexão e tente novamente.');
+      service?.connectSignaling(); return;
+    }
+    const channelId = getActiveVoiceChannelId(), user = currentUser();
+    if (!channelId || !user) { showStreamError('Entre em um canal de voz antes de transmitir.'); return; }
+    const desktop = window.DiscordNative?.desktopCapture;
+    const getSources = desktop?.getDesktopCaptureSources || desktop?.getSources;
+    if (!getSources) { showStreamError('Lista de telas indisponível. Reinicie o Discord atualizado.'); return; }
+    const dialog = document.createElement('section'); dialog.id = 'zap-capture-picker';
+    dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-label', 'Escolher tela para transmitir');
+    dialog.style.cssText = 'position:fixed;inset:15% 20%;overflow:auto;background:#232428;color:white;padding:24px;border:2px solid #5865f2;border-radius:12px;z-index:2147483646';
+    const heading = document.createElement('h2'); heading.textContent = 'Escolha a tela ou janela'; dialog.appendChild(heading);
+    const close = document.createElement('button'); close.textContent = 'Cancelar'; close.onclick = () => dialog.remove(); dialog.appendChild(close);
+    document.body.appendChild(dialog);
+    try {
+      const sources = await getSources.call(desktop, { types: ['screen', 'window'] });
+      if (!dialog.isConnected) return;
+      if (!sources?.length) throw Error('Nenhuma tela ou janela disponível.');
+      const quality = document.createElement('select'); quality.setAttribute('aria-label', 'Qualidade');
+      for (const value of ['1920x1080', '1280x720', '2560x1440']) {
+        const option = document.createElement('option'); option.value = value; option.textContent = value; quality.appendChild(option);
+      }
+      dialog.appendChild(quality);
+      const fps = document.createElement('select'); fps.setAttribute('aria-label', 'Quadros por segundo');
+      for (const value of ['60', '30']) { const option = document.createElement('option'); option.value = value; option.textContent = value + ' FPS'; fps.appendChild(option); }
+      dialog.appendChild(fps);
+      if (!sources.some(source => /^(screen|window):/.test(source.id))) throw Error('Nenhuma fonte compatível encontrada.');
+      for (const source of sources) {
+        if (!/^(screen|window):/.test(source.id)) continue;
+        const button = document.createElement('button'); button.textContent = source.name || source.id;
+        button.style.cssText = 'display:block;width:100%;padding:14px;margin-top:8px';
+        button.onclick = async () => {
+          if (getActiveVoiceChannelId() !== channelId) { dialog.remove(); showStreamError('O canal mudou. Escolha a tela novamente.'); return; }
+          window.__zapCaptureSourceId = source.id;
+          const [width,height] = quality.value.split('x').map(Number);
+          window.__zapCaptureOptions = { width, height, frameRate: Number(fps.value) };
+          dialog.remove();
+          try { attachStreamToNativePlayer(await service.startBroadcast(channelId, user.id), true); }
+          catch (error) { showStreamError('Não foi possível iniciar: ' + error.message); }
+        };
+        dialog.appendChild(button);
+      }
+    } catch (error) { dialog.remove(); showStreamError(error.message); }
   }
 
-  // Hook no botão de tela no painel de voz
+  // The mod's button never invokes Discord Go Live. Native events do not start capture.
+  window.__zapOpenCapturePicker = openCapturePicker;
+  if (typeof document !== 'undefined' && !document.getElementById('zap-share-button')) {
+    const button = document.createElement('button'); button.id = 'zap-share-button';
+    button.textContent = 'Transmitir / parar pelo site';
+    button.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:10001;padding:12px;background:#5865f2;color:white;border:0;border-radius:8px';
+    button.onclick = () => window.__zapOpenCapturePicker().catch(error => showStreamError(error.message));
+    document.body?.appendChild(button);
+  }
+  if (typeof document !== 'undefined' && !document.getElementById('zap-watch-button')) {
+    const button = document.createElement('button'); button.id = 'zap-watch-button'; button.textContent = 'Assistir pelo site';
+    button.style.cssText = 'position:fixed;right:20px;bottom:64px;z-index:10001;padding:10px;background:#303238;color:white;border:0;border-radius:8px';
+    button.onclick = async () => {
+      if (!window.__zapEnabled) return;
+      const channel = getActiveVoiceChannelId(), user = currentUser(), service = window.__zapWebRTCInstance;
+      if (!channel || !user) { showStreamError('Entre no mesmo canal de voz de quem transmite.'); return; }
+      if (service?.localStream) { showStreamError('Pare sua transmissão antes de assistir outra.'); return; }
+      service?.stopViewing(); detachStreamFromNativePlayer(); window.__zapViewingPaused = false;
+      try { await service?.subscribeToStream(channel,user.id); }
+      catch (error) { showStreamError(error.message); }
+    };
+    document.body?.appendChild(button);
+  }
   if (typeof document !== 'undefined' && !window.__zapButtonHookRegistered) {
     window.__zapButtonHookRegistered = true;
-    document.addEventListener('click', (e) => {
-      const btn = e.target?.closest?.('button[aria-label="Compartilhe sua tela"], button[aria-label="Share Your Screen"], button[aria-label="Compartilhar sua tela"]');
-      if (btn) {
-        const service = window.__zapWebRTCInstance;
-        if (window.__zapEnabled && !service?.localStream && service?.ws?.readyState !== 1) {
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          showStreamError('Servidor de transmissão desconectado. Aguarde a reconexão e tente novamente.');
-          service?.connectSignaling();
-          return;
-        }
-        if (service?.localStream) {
-          service.stopBroadcast();
-          detachStreamFromNativePlayer();
-        }
-      }
+    document.addEventListener('click', event => {
+      if (!window.__zapEnabled) return;
+      const button = event.target?.closest?.('button[aria-label="Compartilhe sua tela"], button[aria-label="Share Your Screen"], button[aria-label="Compartilhar sua tela"], [role="button"][aria-label="Compartilhe sua tela"], [role="button"][aria-label="Share Your Screen"]');
+      if (!button) return;
+      event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+      window.__zapOpenCapturePicker().catch(error => showStreamError(error.message));
     }, true);
   }
-
   // Verificação de sincronização periódica de canal (a cada 2s)
   if (typeof setInterval !== 'undefined' && !window.__zapChannelSyncInterval) {
     let lastVoiceChannelId = null;
@@ -532,7 +368,8 @@
         if (service) {
           if (currentChannelId && user) {
             console.log('[DiscordMod] Canal de voz ativo sincronizado:', currentChannelId);
-            service.subscribeToStream(currentChannelId, user.id);
+            window.__zapViewingPaused = false;
+            service.subscribeToStream(currentChannelId, user.id).catch(error => showStreamError(error.message));
           } else {
             console.log('[DiscordMod] Saiu do canal de voz.');
             service.leaveChannel();
@@ -540,10 +377,14 @@
           }
         }
       }
+      if (service?.localStream && !window.__localMediaStream) attachStreamToNativePlayer(service.localStream, true);
+      if ((window.__activeMediaStream || window.__localMediaStream) && typeof document !== 'undefined' && !document.getElementById('zap-custom-video-player')) {
+        attachStreamToNativePlayer(window.__activeMediaStream || window.__localMediaStream, !window.__activeMediaStream);
+      }
     }, 2000);
   }
 
-  const current = store.getClientOverrides()?.[primaryExperiment];
+  const current = store?.getClientOverrides?.()?.[primaryExperiment];
   const verified = enabled ? current?.variantId === -1 : current == null;
 
   const player = typeof document === 'undefined' ? null : document.getElementById('zap-custom-video-player');
@@ -560,7 +401,7 @@
       version: window.__DISCORD_MOD_VERSION__,
       hasUser: Boolean(currentUser()),
       hasVoiceChannel: Boolean(getActiveVoiceChannelId()),
-      subscribed: Boolean(window.__zapDispatcherIntercepted),
+      independentCapture: true,
       signalingState: window.__zapWebRTCInstance?.ws?.readyState,
       capturing: Boolean(window.__zapWebRTCInstance?.localStream),
       receiving: Boolean(window.__zapWebRTCInstance?.remoteStream),

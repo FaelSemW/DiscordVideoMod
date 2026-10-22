@@ -1,3 +1,15 @@
+# 1.0.8 — captura e player independentes
+
+- Botões próprios para transmitir/parar e assistir, com escolha explícita da fonte, resolução e FPS. O caminho próprio não inicia Go Live oficial.
+- Remove início de captura por eventos do dispatcher nativo e a ocultação de erros/spinners do Discord.
+- Player independente da montagem das células do Discord, com controles de reprodução, aviso de autoplay e diagnóstico de ausência de quadros.
+- Impede inscrições duplicadas de destruírem uma negociação em andamento; adiciona timeout e limpeza de timers.
+- Remove dimensões mínimas rígidas da captura e usa preferências em getDisplayMedia.
+- Carrega configuração ICE do backend pelo Electron. O endpoint público ainda fornece somente STUN; não há TURN operacional provisionado por esta versão.
+- Testes automatizados de seleção, isolamento do clique, troca de canal, captura cancelada, ICE, sinalização e diagnóstico. Chamada real entre computadores ainda não validada.
+
+Feche totalmente e reabra os clientes dos dois lados. Use **Transmitir / parar pelo site** e **Assistir pelo site**, dentro do mesmo canal de voz. O servidor atual suporta uma transmissão por canal.
+
 # 1.0.7 — API nativa de captura
 
 - Corrige o fallback para DiscordNative.desktopCapture.getDesktopCaptureSources, API encontrada no preload do cliente 1.0.9264. Mantém compatibilidade com getSources quando existir.
