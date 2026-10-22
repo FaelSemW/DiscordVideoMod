@@ -1,3 +1,11 @@
+# 1.0.7 — API nativa de captura
+
+- Corrige o fallback para DiscordNative.desktopCapture.getDesktopCaptureSources, API encontrada no preload do cliente 1.0.9264. Mantém compatibilidade com getSources quando existir.
+- Respeita o identificador de tela/janela selecionado; fonte ausente gera erro sem capturar outro monitor.
+- Preserva o erro original de getDisplayMedia em vez da mensagem genérica de método indisponível.
+- Tenta áudio desktop junto com vídeo; se não for suportado, tenta apenas vídeo e apresenta aviso explícito de ausência de áudio.
+- Testes cobrem API nativa, seleção de janela, fonte ausente e preservação de erro. Captura real ainda precisa ser confirmada nos computadores dos usuários.
+
 # 1.0.6 — eventos de transmissão e diagnóstico
 
 - Assina eventos do dispatcher em vez de substituir dispatch, incluindo chamadas que já guardaram a função original.

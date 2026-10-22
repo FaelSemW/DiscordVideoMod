@@ -195,7 +195,7 @@
 
     const service = window.__zapWebRTCInstance;
     service.on('statusChange', data => {
-      if (data.status === 'error') showStreamError(data.message || 'Falha na conexão de transmissão.');
+      if (data.status === 'error' || data.status === 'warning') showStreamError(data.message || 'Falha na conexão de transmissão.');
     });
     service.connectSignaling();
 

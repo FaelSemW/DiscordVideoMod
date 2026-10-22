@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-function service() {
+function service(environment = {}) {
   class PC {
     constructor() { this.connectionState = 'new'; this.remoteDescription = null; this.candidates = []; }
     addTrack() {} close() { this.connectionState = 'closed'; }
@@ -14,7 +14,7 @@ function service() {
     getSenders() { return []; }
   }
   const context = { console, setTimeout, clearTimeout, setInterval, clearInterval, RTCPeerConnection: PC,
-    RTCSessionDescription: function(x) { return x; }, WebSocket: { OPEN: 1, CONNECTING: 0 } };
+    RTCSessionDescription: function(x) { return x; }, WebSocket: { OPEN: 1, CONNECTING: 0 }, ...environment };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(__dirname + '/webrtcService.js', 'utf8').replace('export class WebRTCService', 'globalThis.Service = class WebRTCService'), context);
   const s = new context.Service();
@@ -32,6 +32,44 @@ test('concurrent start captures once and announces no shared offer', async () =>
   await s.createBroadcasterPeerConnection('viewer1'); await s.createBroadcasterPeerConnection('viewer2');
   assert.equal(s.broadcasterPcs.size, 2);
   assert.notEqual(s.broadcasterPcs.get('viewer1'), s.broadcasterPcs.get('viewer2'));
+});
+
+test('native fallback uses getDesktopCaptureSources and honors selected window', async () => {
+  let captured;
+  const stream = { getVideoTracks: () => [{ addEventListener() {} }] };
+  const s = service({
+    window: { __zapCaptureSourceId: 'window:42:0', DiscordNative: { desktopCapture: {
+      async getDesktopCaptureSources() { return [{id:'screen:0:0'}, {id:'window:42:0'}]; }
+    } } },
+    navigator: { mediaDevices: {
+      async getDisplayMedia() { throw new Error('display unavailable'); },
+      async getUserMedia(constraints) { captured = constraints; return stream; }
+    } }
+  });
+  assert.equal(await s.startScreenCapture(), stream);
+  assert.equal(captured.video.mandatory.chromeMediaSourceId, 'window:42:0');
+});
+
+test('capture failure preserves original display error', async () => {
+  const s = service({ window: {}, navigator: {mediaDevices:{async getDisplayMedia(){throw new Error('display denied');}}} });
+  await assert.rejects(s.startScreenCapture(), /getDisplayMedia: Error: display denied/);
+});
+
+test('desktop audio failure retries video only and emits a warning', async () => {
+  const requests = [], warnings = [];
+  const stream = { getVideoTracks: () => [{addEventListener(){}}] };
+  const s = service({window:{DiscordNative:{desktopCapture:{async getDesktopCaptureSources(){return [{id:'screen:0:0'}];}}}},navigator:{mediaDevices:{async getUserMedia(request){requests.push(request); if(request.audio)throw Error('loopback unavailable'); return stream;}}}});
+  s.on('statusChange', event => warnings.push(event));
+  assert.equal(await s.startScreenCapture(),stream);
+  assert.equal(requests.length,2); assert.equal(requests[1].audio,false);
+  assert.equal(warnings[0].status,'warning'); assert.match(warnings[0].message,/sem áudio/);
+});
+
+test('missing selected source never captures a different screen', async () => {
+  let captured = false;
+  const s = service({ window: {__zapCaptureSourceId:'window:missing',DiscordNative:{desktopCapture:{async getDesktopCaptureSources(){return [{id:'screen:0:0'}];}}}},navigator:{mediaDevices:{async getUserMedia(){captured=true;}}} });
+  await assert.rejects(s.startScreenCapture(), /selecionada/);
+  assert.equal(captured,false);
 });
 test('ICE received before offer is queued and flushed after remote description', async () => {
   const s = service(); s.activeChannelId = 'room'; s.currentUserId = 'viewer';

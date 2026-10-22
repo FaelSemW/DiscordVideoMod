@@ -242,6 +242,7 @@ export class WebRTCService {
     }
 
     console.log('[WebRTCService] Solicitando captura de tela nativa 1080p60...');
+    const failures = [];
 
     // getDisplayMedia padrão do Chromium com Desktop Duplication
     if (navigator.mediaDevices?.getDisplayMedia) {
@@ -264,17 +265,23 @@ export class WebRTCService {
         this.setupStreamEndedHandler(stream);
         return stream;
       } catch (err) {
+        failures.push(`getDisplayMedia: ${err.name || 'Error'}: ${err.message}`);
         console.warn('[WebRTCService] Falha getDisplayMedia, tentando fallback desktopCapture:', err);
       }
     }
 
     // Fallback: DiscordNative desktopCapture
-    if (window.DiscordNative?.desktopCapture?.getSources) {
-      const sources = await window.DiscordNative.desktopCapture.getSources({ types: ['screen', 'window'] });
+    const desktop = window.DiscordNative?.desktopCapture;
+    const getSources = desktop?.getDesktopCaptureSources || desktop?.getSources;
+    if (typeof getSources === 'function' && navigator.mediaDevices?.getUserMedia) {
+      try {
+      const sources = await getSources.call(desktop, { types: ['screen', 'window'] });
       if (sources && sources.length > 0) {
-        const target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
+        const selected = window.__zapCaptureSourceId;
+        const target = selected ? sources.find(s => s.id === selected) : sources.find(s => s.id.startsWith('screen:')) || sources[0];
+        if (!target) throw new Error('A tela ou janela selecionada não está mais disponível. Selecione novamente.');
+        const constraints = {
+          audio: { mandatory: { chromeMediaSource: 'desktop' } },
           video: {
             mandatory: {
               chromeMediaSource: 'desktop',
@@ -287,14 +294,26 @@ export class WebRTCService {
               maxFrameRate: 60
             }
           }
-        });
+        };
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (audioError) {
+          // Some Windows/Electron combinations cannot provide desktop loopback here.
+          stream = await navigator.mediaDevices.getUserMedia({ ...constraints, audio: false });
+          this.emit('statusChange', { status: 'warning', message: 'Captura iniciada sem áudio do sistema: ' + audioError.message });
+        }
         this.localStream = stream;
         this.setupStreamEndedHandler(stream);
         return stream;
       }
+      failures.push('desktopCapture: nenhuma fonte encontrada');
+      } catch (err) {
+        failures.push(`desktopCapture: ${err.name || 'Error'}: ${err.message}`);
+      }
     }
 
-    throw new Error('Nenhum método de captura de tela nativa disponível.');
+    throw new Error(failures.length ? failures.join(' | ') : 'APIs de captura indisponíveis neste frame do Discord.');
   }
 
   setupStreamEndedHandler(stream) {
