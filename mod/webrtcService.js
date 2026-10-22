@@ -69,13 +69,22 @@ export class WebRTCService {
 
   // --- Conexão de Sinalização (WebSocket) ---
   connectSignaling() {
+    if (this.isDestroyed) return Promise.resolve(false);
     if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve(true);
     if (this.connectPromise) return this.connectPromise;
 
     this.connectPromise = new Promise((resolve) => {
+      let timeout;
+      const finish = value => { clearTimeout(timeout); resolve(value); };
       try {
         console.log(`[WebRTCService] Conectando sinalização em ${this.signalingUrl}...`);
         this.ws = new WebSocket(this.signalingUrl);
+        const socket = this.ws;
+        timeout = setTimeout(() => {
+          finish(false);
+          socket.close();
+          this.emit('statusChange', { status: 'error', message: 'Tempo de conexão com o servidor esgotado' });
+        }, 10000);
 
         this.ws.onopen = () => {
           console.log('[WebRTCService] WebSocket de sinalização conectado com sucesso.');
@@ -98,7 +107,7 @@ export class WebRTCService {
               });
             }
           }
-          resolve(true);
+          finish(true);
         };
 
         this.ws.onmessage = (event) => {
@@ -107,7 +116,7 @@ export class WebRTCService {
         };
 
         this.ws.onclose = () => {
-          resolve(false);
+          finish(false);
           console.warn('[WebRTCService] WebSocket desconectado. Tentando reconectar...');
           this.stopHeartbeat();
           this.emit('statusChange', { status: 'disconnected' });
@@ -119,11 +128,11 @@ export class WebRTCService {
 
         this.ws.onerror = (err) => {
           console.warn('[WebRTCService] Erro no WebSocket de sinalização:', err);
-          resolve(false);
+          finish(false);
         };
       } catch (err) {
         console.error('[WebRTCService] Falha ao criar WebSocket:', err);
-        resolve(false);
+        finish(false);
       }
     }).finally(() => { this.connectPromise = null; });
     return this.connectPromise;

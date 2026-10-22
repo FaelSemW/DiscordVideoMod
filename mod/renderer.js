@@ -5,6 +5,21 @@
   const primaryExperiment = '2026-08-video-guard';
   const ZAP_SIGNALING = 'wss://zaprecovery.online/signaling';
 
+  function showStreamError(message) {
+    window.__zapLastError = { stage: 'connection', message, at: Date.now() };
+    if (typeof document === 'undefined') return;
+    let notice = document.getElementById('zap-stream-error');
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.id = 'zap-stream-error';
+      notice.setAttribute('role', 'status');
+      notice.style.cssText = 'position:fixed;bottom:90px;left:24px;z-index:2147483647;background:#412329;color:white;padding:14px;border-radius:8px;max-width:380px';
+      notice.addEventListener('click', () => notice.remove());
+      document.body?.appendChild(notice);
+    }
+    notice.textContent = message + ' (clique para fechar)';
+  }
+
   if (!window.__zapInitializedLog) {
     window.__zapInitializedLog = true;
     console.log(
@@ -179,6 +194,9 @@
     });
 
     const service = window.__zapWebRTCInstance;
+    service.on('statusChange', data => {
+      if (data.status === 'error') showStreamError(data.message || 'Falha na conexão de transmissão.');
+    });
     service.connectSignaling();
 
     service.on('remoteStream', (stream) => {
@@ -294,12 +312,15 @@
   );
 
   const userStore = candidates.find(x => {
-    try { return x && typeof x.getCurrentUser === 'function' && x.getName?.() === 'UserStore'; }
+    try { return x && typeof x.getCurrentUser === 'function' && (x.getName?.() === 'UserStore' || typeof x.getUser === 'function'); }
     catch { return false; }
   });
 
+  window.__zapStores = { userStore, candidates };
+  const currentUser = () => window.__zapStores?.userStore?.getCurrentUser?.();
+
   function getActiveVoiceChannelId() {
-    for (const c of candidates) {
+    for (const c of window.__zapStores?.candidates || []) {
       try {
         if (c && typeof c.getVoiceChannelId === 'function') {
           const id = c.getVoiceChannelId();
@@ -315,7 +336,7 @@
   // Desbloqueia experimentos de desenvolvedor (1080p60 nativo)
   let devUnlocked = false;
   try {
-    const user = userStore?.getCurrentUser?.();
+    const user = currentUser();
     if (user) {
       Object.defineProperty(user, 'isDeveloper', { get: () => true, configurable: true });
       Object.defineProperty(user, 'isStaff', { get: () => true, configurable: true });
@@ -366,7 +387,7 @@
             });
           }
         }
-        const u = userStore?.getCurrentUser?.();
+        const u = currentUser();
         if (u) {
           Object.defineProperty(u, 'isDeveloper', { get: () => true, configurable: true });
           Object.defineProperty(u, 'isStaff', { get: () => true, configurable: true });
@@ -381,19 +402,18 @@
   // Interceptação do Dispatcher de eventos
   if (dispatcher && !window.__zapDispatcherIntercepted) {
     window.__zapDispatcherIntercepted = true;
-    const originalDispatch = dispatcher.dispatch.bind(dispatcher);
-
-    dispatcher.dispatch = function (event) {
-      if (!window.__zapEnabled) return originalDispatch(event);
+    const handleStreamEvent = function (event) {
+      if (!window.__zapEnabled) return;
       if (!event || typeof event !== 'object') {
-        return originalDispatch(event);
+        return;
       }
 
       const service = window.__zapWebRTCInstance;
+      window.__zapLastEvent = { type: event.type, fields: Object.keys(event), at: Date.now() };
       const voiceChannelId = event.channelId ||
         (event.streamKey ? event.streamKey.split(':')[2] : null) ||
         getActiveVoiceChannelId();
-      const currentUser = userStore?.getCurrentUser?.();
+      const user = currentUser();
 
       // Início de transmissão nativa (Go Live)
       if (
@@ -404,15 +424,17 @@
           Boolean(event.desktopDescription?.id || event.sourceId || event.desktopDescription);
         const targetChannelId = event.channelId || voiceChannelId;
         console.log('[DiscordMod Dispatcher] Go Live acionado:', event.type, 'channelId:', targetChannelId);
-        if (service && targetChannelId && currentUser) {
+        if (service && targetChannelId && user) {
           if (hasSource) {
             window.__zapCaptureSourceId = event.desktopDescription?.id || event.sourceId || window.__zapCaptureSourceId || null;
-            service.startBroadcast(targetChannelId, currentUser.id)
+            service.startBroadcast(targetChannelId, user.id)
               .then(stream => {
                 console.log('[DiscordMod] Transmissão iniciada! Vinculando preview local no player...');
                 attachStreamToNativePlayer(stream, true);
               })
               .catch(err => {
+                window.__zapLastError = { stage: 'capture', message: String(err?.message || err), at: Date.now() };
+                showStreamError('Não foi possível iniciar a transmissão: ' + String(err?.message || err));
                 console.error('[DiscordMod] Falha ao iniciar transmissão no WebRTCService:', err);
               });
           } else {
@@ -424,7 +446,7 @@
 
       // Encerramento de transmissão do usuário local
       if (event.type === 'STREAM_STOP') {
-        if (event.streamKey && currentUser?.id && event.streamKey.endsWith(currentUser.id)) {
+        if (event.streamKey && user?.id && event.streamKey.endsWith(user.id)) {
           console.log('[DiscordMod Dispatcher] Transmissão local finalizada.');
           if (service) service.stopBroadcast();
           detachStreamFromNativePlayer();
@@ -434,8 +456,8 @@
       // Intercepta clique para assistir stream de participante
       if (event.type === 'STREAM_WATCH') {
         console.log('[DiscordMod Dispatcher] Pedido para assistir stream. Canal:', voiceChannelId);
-        if (service && voiceChannelId && currentUser) {
-          service.subscribeToStream(voiceChannelId, currentUser.id);
+        if (service && voiceChannelId && user) {
+          service.subscribeToStream(voiceChannelId, user.id);
         }
       }
 
@@ -458,8 +480,19 @@
         return;
       }
 
-      return originalDispatch(event);
     };
+    if (typeof dispatcher.subscribe === 'function') {
+      for (const type of ['STREAM_START', 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE', 'STREAM_STOP', 'STREAM_WATCH', 'VOICE_CHANNEL_SELECT']) {
+        dispatcher.subscribe(type, event => {
+          // Flux dispatch must finish before capture or subscription can dispatch again.
+          Promise.resolve().then(() => handleStreamEvent({ ...event, type })).catch(error => {
+            window.__zapLastError = { stage: 'event', message: String(error.message), at: Date.now() };
+          });
+        });
+      }
+    } else {
+      window.__zapDispatcherIntercepted = false;
+    }
   }
 
   // Hook no botão de tela no painel de voz
@@ -469,6 +502,14 @@
       const btn = e.target?.closest?.('button[aria-label="Compartilhe sua tela"], button[aria-label="Share Your Screen"], button[aria-label="Compartilhar sua tela"]');
       if (btn) {
         const service = window.__zapWebRTCInstance;
+        if (window.__zapEnabled && !service?.localStream && service?.ws?.readyState !== 1) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          showStreamError('Servidor de transmissão desconectado. Aguarde a reconexão e tente novamente.');
+          service?.connectSignaling();
+          return;
+        }
         if (service?.localStream) {
           service.stopBroadcast();
           detachStreamFromNativePlayer();
@@ -483,15 +524,15 @@
     window.__zapChannelSyncInterval = setInterval(() => {
       if (!window.__zapEnabled) return;
       const currentChannelId = getActiveVoiceChannelId();
-      const currentUser = userStore?.getCurrentUser?.();
+      const user = currentUser();
       const service = window.__zapWebRTCInstance;
 
       if (currentChannelId !== lastVoiceChannelId) {
         lastVoiceChannelId = currentChannelId;
         if (service) {
-          if (currentChannelId && currentUser) {
+          if (currentChannelId && user) {
             console.log('[DiscordMod] Canal de voz ativo sincronizado:', currentChannelId);
-            service.subscribeToStream(currentChannelId, currentUser.id);
+            service.subscribeToStream(currentChannelId, user.id);
           } else {
             console.log('[DiscordMod] Saiu do canal de voz.');
             service.leaveChannel();
@@ -515,6 +556,18 @@
     experimentName: primaryExperiment,
     appliedList,
     devUnlocked,
+    integration: {
+      version: window.__DISCORD_MOD_VERSION__,
+      hasUser: Boolean(currentUser()),
+      hasVoiceChannel: Boolean(getActiveVoiceChannelId()),
+      subscribed: Boolean(window.__zapDispatcherIntercepted),
+      signalingState: window.__zapWebRTCInstance?.ws?.readyState,
+      capturing: Boolean(window.__zapWebRTCInstance?.localStream),
+      receiving: Boolean(window.__zapWebRTCInstance?.remoteStream),
+      peerState: window.__zapWebRTCInstance?.viewerPc?.connectionState,
+      lastEvent: window.__zapLastEvent,
+      lastError: window.__zapLastError
+    },
     videoInfo: {
       count: typeof document === 'undefined' ? 0 : document.querySelectorAll('video').length,
       hasCustomPlayer: Boolean(player),

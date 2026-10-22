@@ -1,3 +1,14 @@
+# 1.0.6 — eventos de transmissão e diagnóstico
+
+- Assina eventos do dispatcher em vez de substituir dispatch, incluindo chamadas que já guardaram a função original.
+- Atualiza referências de usuário/canal usadas pelos callbacks após carregamento tardio dos módulos.
+- Bloqueia o clique de compartilhar tela quando a sinalização está offline, com aviso visível; preserva o seletor quando online.
+- Limita a conexão WebSocket a dez segundos por tentativa.
+- Registra estado da conexão, existência de captura, último evento e erro no video-mod.jsonl. O campo verified continua referente somente ao override do experimento.
+- Dois testes novos cobrem dispatch previamente vinculado/carregamento tardio e clique offline.
+
+Feche completamente e reabra o Discord nos dois computadores após atualizar. Esta versão não elimina todo o RTC oficial nem comprova uma chamada real; ela corrige a recepção de eventos e permite identificar o estágio que falhar.
+
 # 1.0.5 — correções de transmissão
 
 - Remove a regra CSS que escondia o ancestral do player ao encontrar um aviso de transmissão pausada.
