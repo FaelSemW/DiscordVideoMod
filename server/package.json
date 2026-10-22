@@ -1,0 +1,13 @@
+{
+  "name": "discord-mod-signaling-server",
+  "version": "1.0.0",
+  "description": "Servidor de sinalizacao WebRTC leve para o Discord Mod",
+  "main": "signaling.js",
+  "scripts": {
+    "start": "node signaling.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}

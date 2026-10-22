@@ -1,0 +1,20 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build & Dist
+dist/
+bin/
+obj/
+*.zip
+*.log
+
+# Runtime & Local data
+runtime/
+profile/
+*.suo
+*.user
+.vs/
+.idea/
+.vscode/
