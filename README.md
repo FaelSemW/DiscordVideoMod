@@ -1,4 +1,6 @@
-﻿# ðŸš€ Discord Video Mod â€” TransmissÃ£o Nativa Sem Bloqueio & Sem Erro 2012
+> Atualização 1.0.5: consulte [CHANGELOG.md](CHANGELOG.md) para correções, ordem de atualização e limites verificados. A transmissão usa WebRTC próprio; integração completa com todos os controles nativos e solução universal do erro 2012 não foram comprovadas. Reinicie backend e clientes após aplicar os arquivos correspondentes.
+
+# ðŸš€ Discord Video Mod â€” TransmissÃ£o Nativa Sem Bloqueio & Sem Erro 2012
 
 > **Cliente Discord Desktop com suporte nativo a transmissÃµes de tela em 1080p 60 FPS no Brasil, eliminando o Erro 2012 atravÃ©s de pipeline prÃ³prio WebRTC com AtualizaÃ§Ã£o AutomÃ¡tica.**
 

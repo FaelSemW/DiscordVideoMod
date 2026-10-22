@@ -104,22 +104,14 @@ if (!global.__rafaVideoTestLoaded) {
             log('update-file-err', { file: name, error: e.message });
           }
         }
+        if (filesUpdated !== 3) { log('update-incomplete', { filesUpdated }); return; }
         cfg.version = data.version;
         cfg.lastUpdated = new Date().toISOString();
         try { fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8'); } catch {}
         log('update-applied', { version: data.version, filesUpdated });
 
-        // Hot-reload: re-injeta os scripts atualizados em tempo real na janela ativa
-        if (filesUpdated > 0) {
-          try {
-            for (const c of webContents.getAllWebContents()) {
-              if (!c.isDestroyed()) {
-                c.__rafaVideoTestAttached = false;
-                attach(c);
-              }
-            }
-          } catch {}
-        }
+        // Existing peer connections and injected classes keep their version until restart.
+        log('update-restart-required', { version: data.version });
       }
     } catch (e) {
       log('update-check-err', { error: e.message });
@@ -152,9 +144,12 @@ if (!global.__rafaVideoTestLoaded) {
 
         if (ses && typeof ses.setDisplayMediaRequestHandler === 'function') {
           ses.setDisplayMediaRequestHandler((request, callback) => {
-            desktopCapturer.getSources({ types: ['screen', 'window'] }).then((sources) => {
+            desktopCapturer.getSources({ types: ['screen', 'window'] }).then(async (sources) => {
               if (sources && sources.length > 0) {
-                const target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
+                let selected;
+                try { selected = await request.frame.executeJavaScript('window.__zapCaptureSourceId || null'); } catch {}
+                const target = selected ? sources.find(s => s.id === selected) : sources.find(s => s.id.startsWith('screen:')) || sources[0];
+                if (!target) { log('capture-source-unavailable'); callback({}); return; }
                 log('capturing-source', { id: target.id, name: target.name });
                 callback({ video: target, audio: 'loopback' });
               } else {
@@ -175,6 +170,12 @@ if (!global.__rafaVideoTestLoaded) {
   } catch {
     enabled = true;
   }
+
+  // Keep one coherent script generation for this process. Updates apply on restart.
+  const rendererSource = fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8');
+  const serviceSource = fs.readFileSync(path.join(__dirname, 'webrtcService.js'), 'utf8');
+  let loadedVersion = '1.0.0';
+  try { loadedVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')).version || loadedVersion; } catch {}
 
   function attach(contents) {
     if (contents.__rafaVideoTestAttached) return;
@@ -207,21 +208,18 @@ if (!global.__rafaVideoTestLoaded) {
 
           let webrtcServiceJs = '';
           try {
-            const raw = fs.readFileSync(path.join(__dirname, 'webrtcService.js'), 'utf8');
+            const raw = serviceSource;
             webrtcServiceJs = 'if (!window.WebRTCService) {\n' +
               raw.replace('export class WebRTCService', 'window.WebRTCService = class WebRTCService') +
               '\n}\n';
           } catch (e) {}
 
-          let currentVer = '1.0.0';
-          try {
-            currentVer = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')).version || '1.0.0';
-          } catch {}
+          const currentVer = loadedVersion;
 
           const candidate = await frame.executeJavaScript(
             `window.__DISCORD_MOD_VERSION__ = ${JSON.stringify(currentVer)};\n` +
             webrtcServiceJs + '\n' +
-            fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8')
+            rendererSource
               .replace('__RAFA_ENABLED__', JSON.stringify(enabled))
           );
           if (candidate) result = candidate;

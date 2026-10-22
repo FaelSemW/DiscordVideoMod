@@ -39,6 +39,10 @@ export class WebRTCService {
     this.reconnectTimer = null;
     this.pingInterval = null;
     this.isDestroyed = false;
+    this.pendingIce = new Map();
+    this.startPromise = null;
+    this.generation = 0;
+    this.signalQueue = Promise.resolve();
   }
 
   // --- Sistema de Eventos ---
@@ -65,11 +69,10 @@ export class WebRTCService {
 
   // --- Conexão de Sinalização (WebSocket) ---
   connectSignaling() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-      return Promise.resolve();
-    }
+    if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve(true);
+    if (this.connectPromise) return this.connectPromise;
 
-    return new Promise((resolve) => {
+    this.connectPromise = new Promise((resolve) => {
       try {
         console.log(`[WebRTCService] Conectando sinalização em ${this.signalingUrl}...`);
         this.ws = new WebSocket(this.signalingUrl);
@@ -83,6 +86,7 @@ export class WebRTCService {
             if (this.localStream) {
               this.sendSignal({
                 type: 'stream:start',
+                protocolVersion: 2,
                 channelId: this.activeChannelId,
                 userId: this.currentUserId
               });
@@ -98,10 +102,12 @@ export class WebRTCService {
         };
 
         this.ws.onmessage = (event) => {
-          this.handleSignalingMessage(event.data);
+          this.signalQueue = this.signalQueue.then(() => this.handleSignalingMessage(event.data))
+            .catch(err => this.emit('statusChange', { status: 'error', message: err.message }));
         };
 
         this.ws.onclose = () => {
+          resolve(false);
           console.warn('[WebRTCService] WebSocket desconectado. Tentando reconectar...');
           this.stopHeartbeat();
           this.emit('statusChange', { status: 'disconnected' });
@@ -119,7 +125,8 @@ export class WebRTCService {
         console.error('[WebRTCService] Falha ao criar WebSocket:', err);
         resolve(false);
       }
-    });
+    }).finally(() => { this.connectPromise = null; });
+    return this.connectPromise;
   }
 
   startHeartbeat() {
@@ -153,6 +160,8 @@ export class WebRTCService {
 
     const { type, channelId, broadcasterUserId, subscriberUserId, sdpOffer, sdpAnswer, candidate, fromUserId } = msg;
 
+    if (channelId && channelId !== this.activeChannelId) return;
+
     // Novo espectador entrou no canal enquanto estamos transmitindo
     if (type === 'stream:viewer-joined') {
       if (this.localStream && subscriberUserId && subscriberUserId !== this.currentUserId) {
@@ -165,7 +174,6 @@ export class WebRTCService {
     else if (type === 'stream:offer' || type === 'stream:available') {
       if (!this.localStream && broadcasterUserId && sdpOffer) {
         console.log(`[WebRTCService] Oferta de stream recebida no canal ${channelId} de ${broadcasterUserId}`);
-        this.broadcasterUserId = broadcasterUserId;
         this.emit('streamAvailable', { channelId, broadcasterUserId });
         await this.handleIncomingOffer(sdpOffer, broadcasterUserId);
       }
@@ -175,11 +183,12 @@ export class WebRTCService {
     else if (type === 'stream:answer') {
       const targetId = subscriberUserId || fromUserId;
       console.log(`[WebRTCService] Recebida SDP Answer de ${targetId}`);
-      const pc = this.broadcasterPcs.get(targetId) || this.broadcasterPcs.get('initial');
+      const pc = this.broadcasterPcs.get(targetId);
       if (pc) {
         if (pc.signalingState === 'have-local-offer') {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(sdpAnswer));
+            await this.flushIce(targetId, pc);
             console.log(`[WebRTCService] Sessão P2P com ${targetId} estabelecida com sucesso!`);
           } catch (e) {
             console.warn('[WebRTCService] Erro ao aplicar remote answer:', e);
@@ -190,25 +199,14 @@ export class WebRTCService {
 
     // Candidato ICE recebido
     else if (type === 'stream:ice-candidate') {
-      const sender = fromUserId;
-      if (this.localStream) {
-        // Transmissor recebendo do espectador
-        const pc = this.broadcasterPcs.get(sender) || this.broadcasterPcs.get('initial');
-        if (pc && candidate) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (e) {
-            console.warn('[WebRTCService] ICE add error (broadcaster):', e);
-          }
-        }
-      } else if (this.viewerPc && candidate) {
-        // Espectador recebendo do transmissor
-        try {
-          await this.viewerPc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.warn('[WebRTCService] ICE add error (viewer):', e);
-        }
-      }
+      const pc = this.localStream ? this.broadcasterPcs.get(fromUserId) : this.viewerPc;
+      if (!candidate || !fromUserId) return;
+      if (!this.localStream && this.broadcasterUserId && fromUserId !== this.broadcasterUserId) return;
+      if (!pc?.remoteDescription) {
+        const queue = this.pendingIce.get(fromUserId) || [];
+        if (queue.length < 100) queue.push(candidate);
+        this.pendingIce.set(fromUserId, queue);
+      } else await pc.addIceCandidate(candidate);
     }
 
     // Stream encerrado
@@ -220,45 +218,13 @@ export class WebRTCService {
   }
 
   // --- Tratamento de SDP: Fixação de Bitrate Alto (1080p60 @ 10 Mbps) compatível com RFC 4566 ---
-  setHighBitrate(sdp) {
-    if (!sdp) return sdp;
-    const lines = sdp.split('\r\n');
-    let inVideoSection = false;
-    let cIndex = -1;
-    let mVideoIndex = -1;
-    let firstAIndex = -1;
-
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].startsWith('m=video')) {
-        inVideoSection = true;
-        mVideoIndex = i;
-        continue;
-      }
-      if (inVideoSection && lines[i].startsWith('m=')) {
-        break;
-      }
-      if (inVideoSection) {
-        if (lines[i].startsWith('c=') && cIndex === -1) {
-          cIndex = i;
-        }
-        if (lines[i].startsWith('a=') && firstAIndex === -1) {
-          firstAIndex = i;
-        }
-        if (lines[i].startsWith('b=')) {
-          lines.splice(i, 1);
-          i--;
-        }
-      }
-    }
-
-    if (mVideoIndex !== -1) {
-      // Inserir após c= se existir (RFC 4566), senão antes do primeiro a=, senão logo após m=video
-      const insertPos = cIndex !== -1 ? cIndex + 1 : (firstAIndex !== -1 ? firstAIndex : mVideoIndex + 1);
-      lines.splice(insertPos, 0, 'b=AS:10000', 'b=TIAS:10000000');
-    }
-
-    return lines.join('\r\n');
+  async flushIce(userId, pc) {
+    const queue = this.pendingIce.get(userId) || [];
+    this.pendingIce.delete(userId);
+    for (const candidate of queue) await pc.addIceCandidate(candidate);
   }
+
+  setHighBitrate(sdp) { return sdp; } // Preserve Chromium's negotiated SDP.
 
   // --- 1. Captura de Tela Nativa (1080p60 + Áudio) ---
   async startScreenCapture() {
@@ -333,57 +299,29 @@ export class WebRTCService {
   }
 
   // --- 2. Início de Transmissão (Broadcaster) ---
-  async startBroadcast(channelId, userId) {
+  startBroadcast(channelId, userId) {
+    if (this.startPromise) return this.startPromise;
+    if (this.localStream && this.activeChannelId === channelId) return Promise.resolve(this.localStream);
+    if (this.activeChannelId && this.activeChannelId !== channelId) this.leaveChannel();
     this.activeChannelId = channelId;
     this.currentUserId = userId;
-    await this.connectSignaling();
-
-    const stream = await this.startScreenCapture();
-
-    // Cria RTCPeerConnection para gerar oferta inicial (compatibilidade retroativa v1.0.3)
-    const pc = new RTCPeerConnection({
-      iceServers: this.iceServers,
-      bundlePolicy: 'max-bundle'
-    });
-
-    stream.getTracks().forEach((track) => {
-      pc.addTrack(track, stream);
-    });
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.sendSignal({
-          type: 'stream:ice-candidate',
-          channelId: this.activeChannelId,
-          userId: this.currentUserId,
-          candidate: event.candidate.toJSON()
-        });
+    const generation = this.generation;
+    this.startPromise = (async () => {
+      if (!await this.connectSignaling()) throw new Error('Servidor de sinalização indisponível');
+      const stream = await this.startScreenCapture();
+      if (generation !== this.generation || this.isDestroyed) {
+        stream.getTracks().forEach(track => track.stop());
+        if (this.localStream === stream) this.localStream = null;
+        throw new Error('Captura cancelada');
       }
-    };
-
-    const offer = await pc.createOffer({
-      offerToReceiveVideo: false,
-      offerToReceiveAudio: false
-    });
-
-    const modifiedOffer = new RTCSessionDescription({
-      type: offer.type,
-      sdp: this.setHighBitrate(offer.sdp)
-    });
-
-    await pc.setLocalDescription(modifiedOffer);
-
-    // Registra na sinalização
-    this.sendSignal({
-      type: 'stream:start',
-      channelId: this.activeChannelId,
-      userId: this.currentUserId,
-      sdpOffer: pc.localDescription
-    });
-
-    this.broadcasterPcs.set('initial', pc);
-    console.log('[WebRTCService] Transmissão iniciada e anunciada para o canal:', channelId);
-    return stream;
+      if (!stream.getVideoTracks().some(track => track.readyState === 'live')) {
+        this.stopBroadcast();
+        throw new Error('Captura sem faixa de vídeo ativa');
+      }
+      this.sendSignal({ type: 'stream:start', channelId, userId, protocolVersion: 2 });
+      return stream;
+    })().finally(() => { this.startPromise = null; });
+    return this.startPromise;
   }
 
   async createBroadcasterPeerConnection(subscriberUserId) {
@@ -391,9 +329,7 @@ export class WebRTCService {
     console.log(`[WebRTCService] Criando RTCPeerConnection dedicado para espectador: ${subscriberUserId}`);
 
     const existing = this.broadcasterPcs.get(subscriberUserId);
-    if (existing) {
-      try { existing.close(); } catch {}
-    }
+    if (existing) existing.close();
 
     const pc = new RTCPeerConnection({
       iceServers: this.iceServers,
@@ -452,9 +388,11 @@ export class WebRTCService {
 
   // --- 3. Inscrição e Recepção de Transmissão (Viewer) ---
   async subscribeToStream(channelId, userId) {
+    if (this.activeChannelId && this.activeChannelId !== channelId) this.leaveChannel();
     this.activeChannelId = channelId;
     this.currentUserId = userId;
-    await this.connectSignaling();
+    if (!await this.connectSignaling()) return;
+    if (this.localStream) return;
 
     // Se já temos uma sessão P2P conectada e saudável com tracks ativas, não reconecta!
     if (this.viewerPc &&
@@ -475,20 +413,13 @@ export class WebRTCService {
   async handleIncomingOffer(sdpOffer, broadcasterUserId) {
     if (!sdpOffer) return;
 
-    // Se já estivermos conectados com tracks ativas desse mesmo broadcaster, mantém sem interrupção
-    if (this.viewerPc &&
-        this.broadcasterUserId === broadcasterUserId &&
-        (this.viewerPc.connectionState === 'connected' || this.viewerPc.iceConnectionState === 'connected') &&
-        this.remoteStream && this.remoteStream.getTracks().some(t => t.readyState === 'live')) {
-      console.log('[WebRTCService] Sessão P2P já saudável. Mantendo fluxo de vídeo contínuo.');
-      return;
-    }
-
     if (this.viewerPc) {
       try { this.viewerPc.close(); } catch {}
       this.viewerPc = null;
     }
 
+    this.broadcasterUserId = broadcasterUserId;
+    this.remoteStream = null;
     console.log('[WebRTCService] Estabelecendo RTCPeerConnection como espectador...');
     const pc = new RTCPeerConnection({
       iceServers: this.iceServers,
@@ -531,6 +462,7 @@ export class WebRTCService {
     };
 
     await pc.setRemoteDescription(new RTCSessionDescription(sdpOffer));
+    await this.flushIce(broadcasterUserId, pc);
 
     const answer = await pc.createAnswer();
     const modifiedAnswer = new RTCSessionDescription({
@@ -553,6 +485,8 @@ export class WebRTCService {
 
   // --- 4. Encerramento e Limpeza de Recursos ---
   stopBroadcast() {
+    this.generation++;
+    const wasBroadcasting = Boolean(this.localStream);
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => track.stop());
       this.localStream = null;
@@ -563,7 +497,7 @@ export class WebRTCService {
     }
     this.broadcasterPcs.clear();
 
-    if (this.activeChannelId && this.currentUserId) {
+    if (wasBroadcasting && this.activeChannelId && this.currentUserId) {
       this.sendSignal({
         type: 'stream:stop',
         channelId: this.activeChannelId,
@@ -584,6 +518,7 @@ export class WebRTCService {
   }
 
   leaveChannel() {
+    this.pendingIce.clear();
     this.stopBroadcast();
     this.stopViewing();
     this.activeChannelId = null;

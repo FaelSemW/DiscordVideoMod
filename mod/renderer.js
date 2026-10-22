@@ -1,5 +1,7 @@
 (() => {
   const enabled = __RAFA_ENABLED__;
+  window.__zapEnabled = enabled;
+  if (!enabled) window.__zapWebRTCInstance?.destroy();
   const primaryExperiment = '2026-08-video-guard';
   const ZAP_SIGNALING = 'wss://zaprecovery.online/signaling';
 
@@ -18,14 +20,6 @@
     style.id = 'zap-native-stream-fix';
     style.textContent = `
       /* Oculta mensagens oficiais de Erro 2012 e transmissão pausada */
-      [class*="videoOverlay_"],
-      [class*="streamPaused_"],
-      [class*="callAvatarStatus_"],
-      [class*="streamNotice_"],
-      div[class*="noticeRegionBlocked_"],
-      div:has(> [class*="streamPaused_"]) {
-        display: none !important;
-      }
       /* Assegura que o elemento de vídeo customizado ocupe o layout completo */
       #zap-custom-video-player {
         position: absolute !important;
@@ -84,8 +78,11 @@
       video.srcObject = null;
       video.srcObject = stream;
     }
-    video.muted = isLocal;
-    video.volume = isLocal ? 0 : 1.0;
+    if (video.dataset.zapLocal !== String(isLocal)) {
+      video.muted = isLocal;
+      video.volume = isLocal ? 0 : 1.0;
+      video.dataset.zapLocal = String(isLocal);
+    }
     video.autoplay = true;
     video.playsInline = true;
 
@@ -135,27 +132,17 @@
       window.__localMediaStream = stream;
     }
 
-    // Áudio garantido em canal separado para espectadores
-    if (!isLocal && stream.getAudioTracks().length > 0) {
-      if (!window.__zapAudioPlayer) {
-        window.__zapAudioPlayer = new Audio();
-        window.__zapAudioPlayer.autoplay = true;
-      }
-      if (window.__zapAudioPlayer.srcObject !== stream) {
-        window.__zapAudioPlayer.srcObject = stream;
-      }
-      window.__zapAudioPlayer.play().catch(() => {});
-    }
-
     // Localiza ou cria o elemento de vídeo customizado no container da transmissão
     const container = findStreamContainer();
     if (container) {
+      if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
       let customPlayer = document.getElementById('zap-custom-video-player');
       if (!customPlayer) {
         customPlayer = document.createElement('video');
         customPlayer.id = 'zap-custom-video-player';
         customPlayer.autoplay = true;
         customPlayer.playsInline = true;
+        customPlayer.controls = true;
       }
       if (customPlayer.parentElement !== container) {
         container.appendChild(customPlayer);
@@ -163,16 +150,6 @@
       applyStreamToVideo(customPlayer, stream, isLocal);
     }
 
-    // Também vincula em qualquer elemento <video> legítimo (que não seja dummy de 2x2 do Discord)
-    const videoElements = Array.from(document.querySelectorAll('video')).filter(v => {
-      if (v.id === 'zap-custom-video-player') return false;
-      const isDummyAudio = v.width === 2 || v.height === 2 || (v.offsetWidth < 50 && v.offsetHeight < 50 && v.offsetWidth > 0);
-      return !isDummyAudio;
-    });
-
-    for (const v of videoElements) {
-      applyStreamToVideo(v, stream, isLocal);
-    }
   }
 
   function detachStreamFromNativePlayer() {
@@ -191,7 +168,7 @@
 
   // --- 3. Inicializa WebRTCService desacoplado ---
   const WebRTCServiceClass = window.WebRTCService;
-  if (WebRTCServiceClass && !window.__zapWebRTCInstance) {
+  if (enabled && WebRTCServiceClass && !window.__zapWebRTCInstance) {
     window.__zapWebRTCInstance = new WebRTCServiceClass({
       signalingUrl: ZAP_SIGNALING,
       iceServers: [
@@ -240,7 +217,7 @@
       const errorBoxes = document.querySelectorAll('div[role="alert"], [class*="streamPaused_"], div[class*="emptyState_"], div[class*="streamNotice_"]');
       errorBoxes.forEach(el => {
         const text = el.textContent || '';
-        if (text.includes('2012') || text.includes('transmissao nao iniciou') || el.className?.includes?.('streamPaused_')) {
+        if (!el.querySelector('video') && (text.includes('2012') || text.includes('transmissao nao iniciou') || el.className?.includes?.('streamPaused_'))) {
           el.remove();
         }
       });
@@ -258,11 +235,11 @@
   const chunks = window.webpackChunkdiscord_app;
   if (!chunks || typeof chunks.push !== 'function') {
     // Se estivermos em uma janela popout ou sem webpack principal, ainda garantimos a renderização
-    const customPlayer = document.getElementById('zap-custom-video-player');
+    const customPlayer = typeof document === 'undefined' ? null : document.getElementById('zap-custom-video-player');
     const activeStream = window.__activeMediaStream;
     return {
-      status: 'active-no-webpack',
-      verified: true,
+      status: 'waiting-webpack',
+      verified: false,
       hasPlayer: Boolean(customPlayer),
       hasStream: Boolean(activeStream)
     };
@@ -381,7 +358,7 @@
     const reapply = () => {
       try {
         for (const exp of targetExperiments) {
-          if (enabled) {
+          if (window.__zapEnabled) {
             dispatcher.dispatch({
               type: 'APEX_EXPERIMENT_OVERRIDE_CREATE',
               experimentName: exp,
@@ -407,6 +384,7 @@
     const originalDispatch = dispatcher.dispatch.bind(dispatcher);
 
     dispatcher.dispatch = function (event) {
+      if (!window.__zapEnabled) return originalDispatch(event);
       if (!event || typeof event !== 'object') {
         return originalDispatch(event);
       }
@@ -428,6 +406,7 @@
         console.log('[DiscordMod Dispatcher] Go Live acionado:', event.type, 'channelId:', targetChannelId);
         if (service && targetChannelId && currentUser) {
           if (hasSource) {
+            window.__zapCaptureSourceId = event.desktopDescription?.id || event.sourceId || window.__zapCaptureSourceId || null;
             service.startBroadcast(targetChannelId, currentUser.id)
               .then(stream => {
                 console.log('[DiscordMod] Transmissão iniciada! Vinculando preview local no player...');
@@ -472,7 +451,7 @@
 
       // Suprime Erro 2012 oficial e estados de desconexão bloqueada
       if (
-        (event.type === 'RTC_CONNECTION_STATE' && (event.errorCode === 2012 || event.state === 'RTC_DISCONNECTED')) ||
+        (event.type === 'RTC_CONNECTION_STATE' && event.errorCode === 2012) ||
         (event.type === 'MEDIA_ENGINE_CONNECTION_STATE' && event.errorCode === 2012)
       ) {
         console.warn('[DiscordMod Dispatcher] Suprimido disparo de Erro 2012 oficial:', event.type);
@@ -502,6 +481,7 @@
   if (typeof setInterval !== 'undefined' && !window.__zapChannelSyncInterval) {
     let lastVoiceChannelId = null;
     window.__zapChannelSyncInterval = setInterval(() => {
+      if (!window.__zapEnabled) return;
       const currentChannelId = getActiveVoiceChannelId();
       const currentUser = userStore?.getCurrentUser?.();
       const service = window.__zapWebRTCInstance;
@@ -525,7 +505,7 @@
   const current = store.getClientOverrides()?.[primaryExperiment];
   const verified = enabled ? current?.variantId === -1 : current == null;
 
-  const player = document.getElementById('zap-custom-video-player');
+  const player = typeof document === 'undefined' ? null : document.getElementById('zap-custom-video-player');
   const activeStream = window.__activeMediaStream;
   const localStream = window.__localMediaStream;
 
@@ -536,7 +516,7 @@
     appliedList,
     devUnlocked,
     videoInfo: {
-      count: document.querySelectorAll('video').length,
+      count: typeof document === 'undefined' ? 0 : document.querySelectorAll('video').length,
       hasCustomPlayer: Boolean(player),
       customPlayerWidth: player?.videoWidth,
       customPlayerHeight: player?.videoHeight,

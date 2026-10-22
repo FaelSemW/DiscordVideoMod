@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 /**
  * Servidor de SinalizaÃ§Ã£o WebRTC para o Discord Mod
@@ -90,18 +90,17 @@ wss.on('connection', (ws) => {
       registeredUser = userId;
       if (!signalingChannels.has(channelId)) signalingChannels.set(channelId, new Map());
       signalingChannels.get(channelId).set(userId, ws);
-      activeOffers.set(channelId, { broadcasterUserId: userId, sdpOffer });
+      activeOffers.set(channelId, { broadcasterUserId: userId, sdpOffer, protocolVersion: msg.protocolVersion });
       console.log(`[signaling] TransmissÃ£o iniciada no canal ${channelId} por ${userId}`);
 
       const peers = signalingChannels.get(channelId);
       for (const [subId, subWs] of peers) {
         if (subId !== userId && subWs.readyState === 1) {
-          subWs.send(JSON.stringify({
-            type: 'stream:available',
-            channelId,
-            broadcasterUserId: userId,
-            sdpOffer
-          }));
+          if (msg.protocolVersion === 2) {
+              ws.send(JSON.stringify({ type: 'stream:viewer-joined', channelId, subscriberUserId: subId }));
+            } else {
+              subWs.send(JSON.stringify({ type: 'stream:available', channelId, broadcasterUserId: userId, sdpOffer }));
+            }
         }
       }
     } else if (type === 'stream:subscribe') {
@@ -113,13 +112,13 @@ wss.on('connection', (ws) => {
 
       const active = activeOffers.get(channelId);
       if (active && active.broadcasterUserId !== userId) {
-        ws.send(JSON.stringify({
-          type: 'stream:available',
-          channelId,
-          broadcasterUserId: active.broadcasterUserId,
-          sdpOffer: active.sdpOffer
-        }));
+        if (active.protocolVersion !== 2) ws.send(JSON.stringify({ type: 'stream:available', channelId, broadcasterUserId: active.broadcasterUserId, sdpOffer: active.sdpOffer }));
+        const broadcaster = signalingChannels.get(channelId).get(active.broadcasterUserId);
+        if (broadcaster?.readyState === 1) broadcaster.send(JSON.stringify({ type: 'stream:viewer-joined', channelId, subscriberUserId: userId }));
       }
+    } else if (type === 'stream:offer') {
+      const target = signalingChannels.get(channelId)?.get(targetUserId);
+      if (target?.readyState === 1) target.send(JSON.stringify({ type: 'stream:offer', channelId, broadcasterUserId: userId, sdpOffer }));
     } else if (type === 'stream:answer') {
       const peers = signalingChannels.get(channelId);
       if (peers && targetUserId) {
@@ -160,6 +159,7 @@ wss.on('connection', (ws) => {
         }
       }
     } else if (type === 'stream:stop') {
+        if (activeOffers.get(channelId)?.broadcasterUserId !== userId) return;
       if (activeOffers.get(channelId)?.broadcasterUserId === userId) {
         activeOffers.delete(channelId);
       }
@@ -210,5 +210,5 @@ setInterval(() => {
 }, 30000);
 
 server.listen(PORT, () => {
-  console.log(`[DiscordMod Signaling] Servidor ativo na porta ${PORT}`);
+  console.log(`[DiscordMod Signaling] Servidor ativo na porta ${server.address().port}`);
 });

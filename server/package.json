@@ -4,7 +4,8 @@
   "description": "Servidor de sinalizacao WebRTC leve para o Discord Mod",
   "main": "signaling.js",
   "scripts": {
-    "start": "node signaling.js"
+    "start": "node signaling.js",
+    "test": "node --test signaling.test.cjs ../mod/webrtc.test.cjs && node ../mod/test.cjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
