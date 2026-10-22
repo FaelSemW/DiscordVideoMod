@@ -396,10 +396,16 @@ export class WebRTCService {
     };
 
     pc.ontrack = (event) => {
-      console.log('[WebRTCService] Stream remoto recebido com sucesso!', event.streams);
-      const stream = event.streams[0] || new MediaStream([event.track]);
-      this.remoteStream = stream;
-      this.emit('remoteStream', stream);
+      console.log('[WebRTCService] Track remoto recebido:', event.track.kind, 'id:', event.track.id);
+      if (!this.remoteStream) {
+        this.remoteStream = event.streams[0] || new MediaStream();
+      }
+      if (!this.remoteStream.getTracks().some(t => t.id === event.track.id)) {
+        this.remoteStream.addTrack(event.track);
+      }
+      event.track.enabled = true;
+      console.log('[WebRTCService] Total tracks no remoteStream:', this.remoteStream.getTracks().length);
+      this.emit('remoteStream', this.remoteStream);
     };
 
     await pc.setRemoteDescription(new RTCSessionDescription(sdpOffer));
