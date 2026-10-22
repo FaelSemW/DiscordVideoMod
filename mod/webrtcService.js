@@ -1,6 +1,6 @@
-/**
- * WebRTCService — Serviço de Mídia e Sinalização P2P para Discord Mod
- * Desacoplado dos servidores de mídia oficiais da Discord Inc.
+﻿/**
+ * WebRTCService â€” ServiÃ§o de MÃ­dia e SinalizaÃ§Ã£o P2P para Discord Mod
+ * Desacoplado dos servidores de mÃ­dia oficiais da Discord Inc.
  * Conecta via WebSocket ao backend zaprecovery.online e negocia WebRTC 1080p60 direto.
  */
 
@@ -59,7 +59,7 @@ export class WebRTCService {
     }
   }
 
-  // --- Conexão de Sinalização (WebSocket) ---
+  // --- ConexÃ£o de SinalizaÃ§Ã£o (WebSocket) ---
   connectSignaling() {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return Promise.resolve();
@@ -67,18 +67,18 @@ export class WebRTCService {
 
     return new Promise((resolve) => {
       try {
-        console.log(`[WebRTCService] Conectando sinalização em ${this.signalingUrl}...`);
+        console.log(`[WebRTCService] Conectando sinalizaÃ§Ã£o em ${this.signalingUrl}...`);
         this.ws = new WebSocket(this.signalingUrl);
 
         this.ws.onopen = () => {
-          console.log('[WebRTCService] WebSocket de sinalização conectado com sucesso.');
+          console.log('[WebRTCService] WebSocket de sinalizaÃ§Ã£o conectado com sucesso.');
           this.emit('statusChange', { status: 'connected' });
           this.startHeartbeat();
 
-          // Se já estávamos inscritos em um canal, reenvia a inscrição
+          // Se jÃ¡ estÃ¡vamos inscritos em um canal, reenvia a inscriÃ§Ã£o
           if (this.activeChannelId && this.currentUserId) {
             if (this.localStream) {
-              // Re-anuncia transmissão
+              // Re-anuncia transmissÃ£o
               this.sendSignal({
                 type: 'stream:start',
                 channelId: this.activeChannelId,
@@ -111,7 +111,7 @@ export class WebRTCService {
         };
 
         this.ws.onerror = (err) => {
-          console.warn('[WebRTCService] Erro no WebSocket de sinalização:', err);
+          console.warn('[WebRTCService] Erro no WebSocket de sinalizaÃ§Ã£o:', err);
           resolve(false);
         };
       } catch (err) {
@@ -145,20 +145,20 @@ export class WebRTCService {
     }
   }
 
-  // --- Manipulação de Mensagens de Sinalização ---
+  // --- ManipulaÃ§Ã£o de Mensagens de SinalizaÃ§Ã£o ---
   async handleSignalingMessage(raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
     const { type, channelId, broadcasterUserId, subscriberUserId, sdpOffer, sdpAnswer, candidate, fromUserId } = msg;
 
-    // Novo stream disponível no canal
+    // Novo stream disponÃ­vel no canal
     if (type === 'stream:available') {
-      console.log(`[WebRTCService] Stream disponível no canal ${channelId} por ${broadcasterUserId}`);
+      console.log(`[WebRTCService] Stream disponÃ­vel no canal ${channelId} por ${broadcasterUserId}`);
       this.broadcasterUserId = broadcasterUserId;
       this.emit('streamAvailable', { channelId, broadcasterUserId });
 
-      // Se estamos inscritos como espectador e não estamos transmitindo, processa a oferta
+      // Se estamos inscritos como espectador e nÃ£o estamos transmitindo, processa a oferta
       if (!this.localStream && this.activeChannelId === channelId) {
         await this.handleIncomingOffer(sdpOffer, broadcasterUserId);
       }
@@ -196,7 +196,7 @@ export class WebRTCService {
     }
   }
 
-  // --- Tratamento de SDP: Fixação de Bitrate Alto (1080p60 @ 10 Mbps) ---
+  // --- Tratamento de SDP: FixaÃ§Ã£o de Bitrate Alto (1080p60 @ 10 Mbps) ---
   setHighBitrate(sdp) {
     if (!sdp) return sdp;
     const lines = sdp.split('\r\n');
@@ -225,7 +225,7 @@ export class WebRTCService {
     return lines.join('\r\n');
   }
 
-  // --- 1. Captura de Tela Nativa (1080p60 + Áudio) ---
+  // --- 1. Captura de Tela Nativa (1080p60 + Ãudio) ---
   async startScreenCapture() {
     if (this.localStream) {
       return this.localStream;
@@ -233,7 +233,7 @@ export class WebRTCService {
 
     console.log('[WebRTCService] Solicitando captura de tela nativa 1080p60...');
 
-    // Tentativa com getDisplayMedia padrão do Electron/Chromium
+    // Tentativa com getDisplayMedia padrÃ£o do Electron/Chromium
     if (navigator.mediaDevices?.getDisplayMedia) {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -283,20 +283,20 @@ export class WebRTCService {
       }
     }
 
-    throw new Error('Nenhum método de captura de tela nativa disponível.');
+    throw new Error('Nenhum mÃ©todo de captura de tela nativa disponÃ­vel.');
   }
 
   setupStreamEndedHandler(stream) {
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.addEventListener('ended', () => {
-        console.log('[WebRTCService] Usuário encerrou captura de tela nativa.');
+        console.log('[WebRTCService] UsuÃ¡rio encerrou captura de tela nativa.');
         this.stopBroadcast();
       });
     }
   }
 
-  // --- 2. Início de Transmissão (Broadcaster) ---
+  // --- 2. InÃ­cio de TransmissÃ£o (Broadcaster) ---
   async startBroadcast(channelId, userId) {
     this.activeChannelId = channelId;
     this.currentUserId = userId;
@@ -310,7 +310,7 @@ export class WebRTCService {
       bundlePolicy: 'max-bundle'
     });
 
-    // Adiciona tracks de vídeo e áudio ao peer connection
+    // Adiciona tracks de vÃ­deo e Ã¡udio ao peer connection
     stream.getTracks().forEach((track) => {
       pc.addTrack(track, stream);
     });
@@ -340,7 +340,7 @@ export class WebRTCService {
 
     await pc.setLocalDescription(modifiedOffer);
 
-    // Registra na sinalização
+    // Registra na sinalizaÃ§Ã£o
     this.sendSignal({
       type: 'stream:start',
       channelId: this.activeChannelId,
@@ -348,13 +348,13 @@ export class WebRTCService {
       sdpOffer: pc.localDescription
     });
 
-    // Mantém o PC do broadcaster
+    // MantÃ©m o PC do broadcaster
     this.broadcasterPcs.set('initial', pc);
-    console.log('[WebRTCService] Transmissão iniciada e anunciada para o canal:', channelId);
+    console.log('[WebRTCService] TransmissÃ£o iniciada e anunciada para o canal:', channelId);
     return stream;
   }
 
-  // --- 3. Inscrição e Recepção de Transmissão (Viewer) ---
+  // --- 3. InscriÃ§Ã£o e RecepÃ§Ã£o de TransmissÃ£o (Viewer) ---
   async subscribeToStream(channelId, userId) {
     this.activeChannelId = channelId;
     this.currentUserId = userId;
@@ -450,7 +450,7 @@ export class WebRTCService {
       });
     }
 
-    console.log('[WebRTCService] Transmissão interrompida com sucesso.');
+    console.log('[WebRTCService] TransmissÃ£o interrompida com sucesso.');
   }
 
   stopViewing() {

@@ -287,13 +287,14 @@
   }
 
   // 6. IntegraÃ§Ã£o do Player com o Ciclo de Vida do React / DOM
-  function applyStreamToVideo(video, stream) {
+  function applyStreamToVideo(video, stream, isLocal = false) {
     if (!video || !stream) return;
     if (video.srcObject !== stream) {
+      video.srcObject = null;
       video.srcObject = stream;
     }
-    video.muted = false;
-    video.volume = 1.0;
+    video.muted = isLocal;
+    video.volume = isLocal ? 0 : 1.0;
     video.autoplay = true;
     video.playsInline = true;
 
@@ -339,14 +340,18 @@
   }
 
   function attachStreamToNativePlayer(stream, isLocal = false) {
-    if (!stream || isLocal || typeof document === 'undefined') return;
-    window.__activeMediaStream = stream;
+    if (!stream || typeof document === 'undefined') return;
+    if (!isLocal) {
+      window.__activeMediaStream = stream;
+    } else {
+      window.__localMediaStream = stream;
+    }
 
     // Dispara estados internos para tirar o React do modo conectando
     if (dispatcher && typeof dispatcher.dispatch === 'function') {
       try {
         dispatcher.dispatch({ type: 'RTC_CONNECTION_STATE', state: 'RTC_CONNECTED' });
-        const bId = window.__zapWebRTCInstance?.broadcasterUserId;
+        const bId = isLocal ? userStore?.getCurrentUser?.()?.id : window.__zapWebRTCInstance?.broadcasterUserId;
         if (bId) {
           dispatcher.dispatch({ type: 'MEDIA_ENGINE_VIDEO_STATE_CHANGED', userId: bId, videoState: 1 });
         }
@@ -357,7 +362,7 @@
     const videoElements = document.querySelectorAll('video');
     let attached = false;
     for (const video of videoElements) {
-      applyStreamToVideo(video, stream);
+      applyStreamToVideo(video, stream, isLocal);
       attached = true;
     }
 
@@ -373,7 +378,7 @@
           player.playsInline = true;
           streamTile.appendChild(player);
         }
-        applyStreamToVideo(player, stream);
+        applyStreamToVideo(player, stream, isLocal);
       }
     }
   }
@@ -381,6 +386,7 @@
   function detachStreamFromNativePlayer() {
     if (typeof document === 'undefined') return;
     window.__activeMediaStream = null;
+    window.__localMediaStream = null;
     const videoElements = document.querySelectorAll('video');
     for (const video of videoElements) {
       if (video && video.srcObject) {
@@ -395,10 +401,14 @@
   if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined' && !window.__zapVideoObserver) {
     window.__zapVideoObserver = new MutationObserver(() => {
       const activeStream = window.__activeMediaStream;
-      if (activeStream) {
+      const localStream = window.__localMediaStream;
+      const streamToApply = activeStream || localStream;
+      const isLocal = !activeStream && Boolean(localStream);
+
+      if (streamToApply) {
         const videoElements = document.querySelectorAll('video');
         for (const video of videoElements) {
-          applyStreamToVideo(video, activeStream);
+          applyStreamToVideo(video, streamToApply, isLocal);
         }
 
         // Limpeza continua de overlays de carregamento
