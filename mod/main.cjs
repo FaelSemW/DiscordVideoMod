@@ -29,15 +29,6 @@ if (!global.__rafaVideoTestLoaded) {
     } catch (e) {}
   }
 
-  let loadedIceServers = null;
-  // This endpoint is public configuration; never include credentials in diagnostics.
-  fetchUpdatePayload('https://zaprecovery.online/api/ice').then(data => {
-    if (Array.isArray(data?.iceServers)) {
-      const valid = data.iceServers.filter(server => server && [].concat(server.urls || []).length && [].concat(server.urls || []).every(url => typeof url === 'string' && /^(stun|turn|turns):/.test(url)));
-      if (valid.length) loadedIceServers = valid;
-    }
-  });
-
   // --- Auto-Updater Client Logic ---
   function fetchUpdatePayload(targetUrl, timeoutMs = 5000) {
     return new Promise((resolve) => {
@@ -92,7 +83,7 @@ if (!global.__rafaVideoTestLoaded) {
       let cfg = {};
       try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
       const currentVer = cfg.version || '1.0.0';
-      const updateUrl = cfg.updateUrl || 'https://zaprecovery.online/api/mod/update';
+      const updateUrl = cfg.updateUrl || (cfg.serverUrl ? cfg.serverUrl + '/api/mod/update' : 'https://discordvideomod.onrender.com/api/mod/update');
 
       const data = await fetchUpdatePayload(updateUrl, 5000);
       if (!data || !data.version || !data.files) return;
@@ -113,26 +104,22 @@ if (!global.__rafaVideoTestLoaded) {
             log('update-file-err', { file: name, error: e.message });
           }
         }
-        if (filesUpdated !== 3) { log('update-incomplete', { filesUpdated }); return; }
         cfg.version = data.version;
         cfg.lastUpdated = new Date().toISOString();
         try { fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8'); } catch {}
         log('update-applied', { version: data.version, filesUpdated });
-
-        // Existing peer connections and injected classes keep their version until restart.
-        log('update-restart-required', { version: data.version });
       }
     } catch (e) {
       log('update-check-err', { error: e.message });
     }
   }
 
-  // Verificação de atualizações rápida no início e a cada 2 minutos em segundo plano
+  // Verificação de atualizações no início e a cada 2 minutos
   checkAndApplyUpdates().catch(() => {});
   const updateInterval = setInterval(() => checkAndApplyUpdates().catch(() => {}), 2 * 60 * 1000);
   updateInterval.unref();
 
-  // Configure native getDisplayMedia picker handler and CSP bypass for zaprecovery.online
+  // Configurações do Electron: CSP permissivo para nuvem e captura de tela robusta
   if (app && typeof app.whenReady === 'function') {
     app.whenReady().then(() => {
       try {
@@ -143,7 +130,7 @@ if (!global.__rafaVideoTestLoaded) {
             for (const header of Object.keys(responseHeaders)) {
               if (header.toLowerCase() === 'content-security-policy') {
                 responseHeaders[header] = responseHeaders[header].map(rule =>
-                  rule.replace(/connect-src\s+/gi, 'connect-src wss://zaprecovery.online https://zaprecovery.online ')
+                  rule.replace(/connect-src\s+/gi, 'connect-src * ')
                 );
               }
             }
@@ -153,14 +140,11 @@ if (!global.__rafaVideoTestLoaded) {
 
         if (ses && typeof ses.setDisplayMediaRequestHandler === 'function') {
           ses.setDisplayMediaRequestHandler((request, callback) => {
-            desktopCapturer.getSources({ types: ['screen', 'window'] }).then(async (sources) => {
+            desktopCapturer.getSources({ types: ['screen', 'window'] }).then((sources) => {
               if (sources && sources.length > 0) {
-                let selected;
-                try { selected = await request.frame.executeJavaScript('window.__zapCaptureSourceId || null'); } catch {}
-                const target = selected && (sources.find(s => s.id === selected) || sources.find(s => s.id === selected + ':0'));
-                if (!target) { log('capture-source-unavailable'); callback({}); return; }
+                const target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
                 log('capturing-source', { id: target.id, name: target.name });
-                callback({ video: target, ...(request.audioRequested ? { audio: 'loopback' } : {}) });
+                callback({ video: target, audio: 'loopback' });
               } else {
                 callback({});
               }
@@ -180,17 +164,11 @@ if (!global.__rafaVideoTestLoaded) {
     enabled = true;
   }
 
-  // Keep one coherent script generation for this process. Updates apply on restart.
-  const rendererSource = fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8');
-  const serviceSource = fs.readFileSync(path.join(__dirname, 'webrtcService.js'), 'utf8');
-  let loadedVersion = '1.0.0';
-  try { loadedVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')).version || loadedVersion; } catch {}
-
   function attach(contents) {
     if (contents.__rafaVideoTestAttached) return;
     contents.__rafaVideoTestAttached = true;
 
-    // Enable DevTools shortcut (Ctrl+Shift+I)
+    // DevTools shortcut (Ctrl+Shift+I)
     contents.on('before-input-event', (event, input) => {
       if (input.control && input.shift && input.key.toLowerCase() === 'i') {
         contents.toggleDevTools();
@@ -217,19 +195,22 @@ if (!global.__rafaVideoTestLoaded) {
 
           let webrtcServiceJs = '';
           try {
-            const raw = serviceSource;
+            const raw = fs.readFileSync(path.join(__dirname, 'webrtcService.js'), 'utf8');
             webrtcServiceJs = 'if (!window.WebRTCService) {\n' +
               raw.replace('export class WebRTCService', 'window.WebRTCService = class WebRTCService') +
               '\n}\n';
           } catch (e) {}
 
-          const currentVer = loadedVersion;
+          let cfg = {};
+          try {
+            cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
+          } catch {}
 
           const candidate = await frame.executeJavaScript(
-            `window.__DISCORD_MOD_VERSION__ = ${JSON.stringify(currentVer)};\n` +
-            `window.__DISCORD_MOD_ICE_SERVERS__ = ${JSON.stringify(loadedIceServers)};\n` +
+            `window.__DISCORD_MOD_VERSION__ = ${JSON.stringify(cfg.version || '1.0.0-stable')};\n` +
+            `window.__ZAP_CONFIG__ = ${JSON.stringify(cfg)};\n` +
             webrtcServiceJs + '\n' +
-            rendererSource
+            fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8')
               .replace('__RAFA_ENABLED__', JSON.stringify(enabled))
           );
           if (candidate) result = candidate;
@@ -237,13 +218,12 @@ if (!global.__rafaVideoTestLoaded) {
         }
 
         result.frames = frames.length;
-        if (result.status !== lastStatus || attempts % 10 === 0 || result.videoInfo) {
+        if (result.status !== lastStatus || attempts % 10 === 0) {
           log(result.status, { ...result, window: contents.id });
           lastStatus = result.status;
         }
 
         if (result.verified && attempts < 90) {
-          // Mantém verificação relaxada contínua a cada 4s para re-renders e diagnósticos
           stop();
           timer = setInterval(tick, 4000);
           timer.unref();

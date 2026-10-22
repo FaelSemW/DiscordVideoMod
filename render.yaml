@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: discord-video-mod
+    env: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true

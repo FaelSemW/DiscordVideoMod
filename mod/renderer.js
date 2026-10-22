@@ -1,282 +1,427 @@
 (() => {
   const enabled = __RAFA_ENABLED__;
-  window.__zapEnabled = enabled;
-  function report(message) {
-    window.__zapLastError = { message: String(message), at: Date.now() };
-    console.error('[DiscordMod]', message);
-    if (typeof document === 'undefined') return;
-    let notice = document.getElementById('zap-stream-error');
-    if (!notice) {
-      notice = document.createElement('div'); notice.id = 'zap-stream-error'; notice.setAttribute('role', 'alert');
-      notice.style.cssText = 'position:fixed;bottom:85px;left:20px;z-index:2147483647;max-width:420px;padding:14px;background:#412329;color:white;border-radius:8px';
-      notice.addEventListener('click', () => notice.remove()); document.body?.appendChild(notice);
-    }
-    notice.textContent = String(message) + ' (clique para fechar)';
+  const primaryExperiment = '2026-08-video-guard';
+  const cfg = window.__ZAP_CONFIG__ || {};
+  const ZAP_SIGNALING = cfg.signalingUrl || (cfg.serverUrl ? cfg.serverUrl.replace(/^http/i, 'ws') + '/signaling' : 'wss://discordvideomod.onrender.com/signaling');
+
+  if (!window.__zapInitializedLog) {
+    window.__zapInitializedLog = true;
+    console.log(
+      '%c[DiscordMod]%c Ativo v' + (window.__DISCORD_MOD_VERSION__ || '1.0.0-stable') + ' (P2P 1080p60 Bypass & Cloud 24/7)',
+      'background: #5865F2; color: #ffffff; font-weight: bold; padding: 2px 6px; border-radius: 4px;',
+      'color: #57F287; font-weight: bold;'
+    );
   }
+
   const chunks = window.webpackChunkdiscord_app;
-  if (!chunks?.push) return { status: 'waiting-webpack', verified: false };
+  if (!chunks || typeof chunks.push !== 'function') return { status: 'waiting-webpack' };
+
+  let req;
   const runtimes = [];
-  chunks.push([[Symbol('zap-native-adapter')], {}, req => runtimes.push(req)]); chunks.pop();
-  const req = runtimes.sort((a,b) => Object.keys(b?.c || {}).length - Object.keys(a?.c || {}).length)[0];
+  chunks.push([[Symbol('screen-unlock-hook')], {}, r => { runtimes.push(r); }]);
+  chunks.pop();
+  req = runtimes.sort((a,b) => Object.keys(b?.c || {}).length - Object.keys(a?.c || {}).length)[0];
   if (!req?.c) return { status: 'waiting-cache' };
-  for (const [id,factory] of Object.entries(req.m || {})) {
-    if (/displayName="(GatewayConnectionStore|StreamRTCConnectionStore|ApplicationStreamingStore|VideoStreamStore|MediaEngineStore|UserStore|SelectedChannelStore)"|ApexExperimentStore/.test(String(factory))) {
-      try { req(id); } catch {}
+
+  const factories = Object.entries(req.m || {});
+
+  // Collect video-guard experiments
+  const targetExperiments = new Set([primaryExperiment]);
+  for (const [, factory] of factories) {
+    const matches = String(factory).match(/202[0-9]-[0-9]{2}-video-guard/g);
+    if (matches) {
+      for (const m of matches) targetExperiments.add(m);
     }
   }
+
+  // Pre-load relevant stores
+  const relevant = factories.filter(([, factory]) =>
+    /ApexExperimentStore|_orderedActionHandlers|getClientOverrides|UserStore|isDeveloper|SelectedChannelStore|getVoiceChannelId/.test(String(factory))
+  );
+  for (const [id] of relevant) {
+    try { req(id); } catch {}
+  }
+
   const candidates = [];
   for (const module of Object.values(req.c)) {
-    const value = module?.exports;
-    if (!value || !['object','function'].includes(typeof value)) continue;
-    candidates.push(value);
-    for (const key of Object.keys(value)) { try { if (value[key] && ['object','function'].includes(typeof value[key])) candidates.push(value[key]); } catch {} }
-  }
-  const named = name => candidates.find(c => { try { return c.getName?.() === name || c.constructor?.displayName === name; } catch { return false; } });
-  const experiment = named('ApexExperimentStore');
-  const dispatcher = experiment?._dispatcher || candidates.find(c => typeof c.dispatch === 'function' && c._actionHandlers);
-  const userStore = named('UserStore') || candidates.find(c => typeof c.getCurrentUser === 'function');
-  const channelStore = named('ChannelStore') || candidates.find(c => typeof c.getChannel === 'function' && typeof c.getDMFromUserId === 'function');
-  const selected = named('SelectedChannelStore') || candidates.find(c => typeof c.getVoiceChannelId === 'function');
-  const media = named('MediaEngineStore'), streams = named('ApplicationStreamingStore'), videoStore = named('VideoStreamStore');
-  const React = candidates.find(c => typeof c.createElement === 'function' && typeof c.useEffect === 'function' && typeof c.useRef === 'function');
-  let verified = false;
-  if (experiment && dispatcher) {
-    const name = '2026-08-video-guard';
-    const previous = experiment.getClientOverrides()?.[name];
-    if (enabled && previous?.variantId !== -1) dispatcher.dispatch({ type:'APEX_EXPERIMENT_OVERRIDE_CREATE', experimentName:name, variantId:-1 });
-    if (!enabled && previous != null) dispatcher.dispatch({ type:'APEX_EXPERIMENT_OVERRIDE_DELETE', experimentName:name });
-    verified = enabled ? experiment.getClientOverrides()?.[name]?.variantId === -1 : experiment.getClientOverrides()?.[name] == null;
-  }
-
-  // Block official stream gateway actions even if a later native UI hook is unavailable.
-  if(enabled && dispatcher && !window.__zapGatewayGuard){
-    const handlers=dispatcher._actionHandlers;
-    const nodes=typeof handlers._nodes?.values==='function'?Array.from(handlers._nodes.values()):Object.values(handlers._dependencyGraph?.nodes || {});
-    const gateway=nodes.find(node=>node.name==='GatewayConnectionStore');
-    if(gateway && typeof handlers._invalidateCaches==='function'){
-      for(const type of ['STREAM_START','STREAM_WATCH','STREAM_STOP','STREAM_SET_PAUSED','STREAM_CREATE']){
-        const original=gateway.actionHandler[type];if(typeof original!=='function')continue;
-        gateway.actionHandler[type]=event=>{
-          if(!window.__zapEnabled)return original(event);
-          const bridge=window.__zapNativeBridge;
-          if(bridge?.ready)bridge.defer(()=>bridge.handleAction(event));
-          else if(type==='STREAM_START'||type==='STREAM_WATCH')report('Integração nativa indisponível. A transmissão oficial foi bloqueada.');
-          return false;
-        };
-      }
-      handlers._invalidateCaches();window.__zapGatewayGuard=true;
-    }
-  }
-
-  class NativeStreamBridge {
-    constructor(dependencies, service) {
-      Object.assign(this,dependencies); this.service=service;
-      this.records=new Map(); this.videoSources=new Map(); this.restores=[]; this.settings=null; this.pendingStart=null;
-      this.ready=false; this.startedSource=null; this.subscriptionRemovers=[]; this.sequence=0;
-    }
-    currentUser() { return this.userStore?.getCurrentUser?.(); }
-    channel() { return this.selected?.getVoiceChannelId?.(); }
-    descriptor(channelId,ownerId,guildId) {
-      const guild = guildId ?? this.channelStore?.getChannel?.(channelId)?.getGuildId?.() ?? null;
-      return { streamType:guild?'guild':'call', guildId:guild, channelId, ownerId, discoverable:true };
-    }
-    key(record) { return record.streamType==='guild' ? `guild:${record.guildId}:${record.channelId}:${record.ownerId}` : `call:${record.channelId}:${record.ownerId}`; }
-    nodes() {
-      const handlers=this.dispatcher._actionHandlers;
-      if (handlers._nodes instanceof Map || typeof handlers._nodes?.values==='function') return Array.from(handlers._nodes.values());
-      return Object.values(handlers._dependencyGraph?.nodes || {});
-    }
-    method(target,key,replacement) {
-      const original=target[key]; target[key]=replacement(original);
-      if (target[key]===original) throw Error('Método nativo não pode ser adaptado: '+key);
-      this.restores.push(()=>{target[key]=original;});
-    }
-    action(node,type,handler) {
-      if (typeof node.actionHandler?.[type]!=='function') return;
-      this.method(node.actionHandler,type,original=>event=>window.__zapEnabled ? handler(event,original) : original(event));
-    }
-    defer(fn) { Promise.resolve().then(fn).catch(error=>report(error.message)); }
-    dispatch(event) { this.dispatcher.dispatch({...event,__zapNative:true}); }
-    changed() { this.streams.emitChange?.(); this.media.emitChange?.(); this.videoStore.emitChange?.(); }
-    install() {
-      const nodes=this.nodes();
-      const gateway=nodes.find(n=>n.name==='GatewayConnectionStore');
-      const rtc=nodes.find(n=>n.name==='StreamRTCConnectionStore');
-      const mediaNode=nodes.find(n=>n.name==='MediaEngineStore');
-      if (!window.__zapGatewayGuard || !gateway || !rtc || !mediaNode || !this.React || !this.streams || !this.media?.getVideoComponent || !this.videoStore) return false;
-      if (typeof this.dispatcher._actionHandlers._invalidateCaches!=='function') return false;
+    const exports = module?.exports;
+    if (!exports || !['object', 'function'].includes(typeof exports)) continue;
+    candidates.push(exports);
+    for (const key of Object.keys(exports)) {
       try {
-        // A native RTC session must never be created with the custom signaling metadata.
-        for (const type of Object.keys(rtc.actionHandler).filter(t=>t.startsWith('STREAM_'))) this.action(rtc,type,()=>false);
-        this.action(mediaNode,'MEDIA_ENGINE_SET_GO_LIVE_SOURCE',event=>{
-          this.settings=event.settings || null;
-          this.defer(()=>this.maybeStart());
-          return true;
+        if (exports[key] && ['object', 'function'].includes(typeof exports[key])) {
+          candidates.push(exports[key]);
+        }
+      } catch {}
+    }
+  }
+
+  const store = candidates.find(x => {
+    try { return x && typeof x.getClientOverrides === 'function' && x.getName?.() === 'ApexExperimentStore'; }
+    catch { return false; }
+  });
+
+  const dispatcher = store?._dispatcher || candidates.find(x =>
+    x && typeof x.dispatch === 'function' && (x._actionHandlers || typeof x.subscribe === 'function')
+  );
+
+  const userStore = candidates.find(x => {
+    try { return x && typeof x.getCurrentUser === 'function' && x.getName?.() === 'UserStore'; }
+    catch { return false; }
+  });
+
+  function getActiveVoiceChannelId() {
+    for (const c of candidates) {
+      try {
+        if (c && typeof c.getVoiceChannelId === 'function') {
+          const id = c.getVoiceChannelId();
+          if (typeof id === 'string' && /^\d+$/.test(id)) return id;
+        }
+      } catch {}
+    }
+    return null;
+  }
+
+  if (!dispatcher || !store) return { status: 'waiting-dispatcher-store' };
+
+  // 1. Unlock Developer Experiments (1080p 60fps & unrestrict settings)
+  let devUnlocked = false;
+  try {
+    const user = userStore?.getCurrentUser?.();
+    if (user) {
+      Object.defineProperty(user, 'isDeveloper', { get: () => true, configurable: true });
+      Object.defineProperty(user, 'isStaff', { get: () => true, configurable: true });
+      devUnlocked = true;
+    }
+    if (user?.constructor?.prototype) {
+      Object.defineProperty(user.constructor.prototype, 'isDeveloper', { get: () => true, configurable: true });
+      Object.defineProperty(user.constructor.prototype, 'isStaff', { get: () => true, configurable: true });
+      devUnlocked = true;
+    }
+  } catch (err) {
+    console.warn('[ZapStream] Dev unlock error:', err);
+  }
+
+  // 2. Override Video Guard experiment to variant -1 (bypasses region restriction)
+  const appliedList = [];
+  for (const experimentName of targetExperiments) {
+    const previous = store.getClientOverrides()?.[experimentName];
+    if (enabled) {
+      if (previous?.variantId !== -1) {
+        dispatcher.dispatch({
+          type: 'APEX_EXPERIMENT_OVERRIDE_CREATE',
+          experimentName,
+          variantId: -1
         });
-        const appNode=nodes.find(n=>n.name==='ApplicationStreamingStore');
-        if (appNode) for (const type of ['STREAM_CREATE','STREAM_UPDATE','STREAM_DELETE']) this.action(appNode,type,(event,original)=>event.__zapNative?original(event):false);
-        this.method(this.media,'getGoLiveSource',original=>(...args)=>window.__zapEnabled && this.pendingStart && this.settings?.desktopSettings
-          ? {desktopSource:{id:this.settings.desktopSettings.sourceId},quality:this.settings.qualityOptions || {resolution:720,frameRate:30}}
-          : original.apply(this.media,args));
-        if(typeof this.media.getGoLiveContext==='function') this.method(this.media,'getGoLiveContext',original=>(...args)=>window.__zapEnabled && this.pendingStart ? (this.settings?.context || 'stream') : original.apply(this.media,args));
-        const bridge=this;
-        this.method(this.media,'getVideoComponent',original=>function(...args){
-          const NativeVideo=original.apply(this,args);
-          if(!window.__zapEnabled)return NativeVideo;
-          if(!bridge.VideoComponent || bridge.originalVideo!==NativeVideo){
-            bridge.originalVideo=NativeVideo;
-            bridge.VideoComponent=function VideoComponent(props){
-              const entry=bridge.videoSources.get(props.streamId);
-              return entry ? bridge.React.createElement(bridge.CustomVideo,{...props,entry}) : bridge.React.createElement(NativeVideo,props);
-            };
+      }
+      appliedList.push(experimentName);
+    } else {
+      if (previous != null) {
+        dispatcher.dispatch({
+          type: 'APEX_EXPERIMENT_OVERRIDE_DELETE',
+          experimentName
+        });
+      }
+    }
+  }
+
+  // Persistent listener for overrides
+  if (dispatcher && !window.__zapOverridesSubscribed) {
+    window.__zapOverridesSubscribed = true;
+    const reapply = () => {
+      try {
+        for (const exp of targetExperiments) {
+          if (enabled) {
+            dispatcher.dispatch({
+              type: 'APEX_EXPERIMENT_OVERRIDE_CREATE',
+              experimentName: exp,
+              variantId: -1
+            });
           }
-          return bridge.VideoComponent;
-        });
-        // The original lists and badges receive backend-owned streams, without spoofing voice state.
-        for (const name of ['getAllApplicationStreams','getAllApplicationStreamsForChannel']) this.method(this.streams,name,original=>(...args)=>{
-          if(!window.__zapEnabled)return original.apply(this.streams,args);
-          return [...this.records.values()].map(r=>r.descriptor).filter(r=>name!=='getAllApplicationStreamsForChannel'||r.channelId===args[0]);
-        });
-        for (const name of ['getStreamForUser','getAnyStreamForUser','getAnyDiscoverableStreamForUser']) this.method(this.streams,name,original=>(userId,guildId)=>{
-          if(!window.__zapEnabled)return original.call(this.streams,userId,guildId);
-          return [...this.records.values()].find(r=>r.descriptor.ownerId===userId&&(guildId===undefined||r.descriptor.guildId===guildId))?.descriptor || null;
-        });
-        this.CustomVideo=function CustomVideo(props){
-          const {entry,...nativeProps}=props;
-          const ref=bridge.React.useRef(null);
-          bridge.React.useEffect(()=>{
-            const video=ref.current;if(!video)return;
-            video.srcObject=entry.stream;
-            const updateAudio=()=>{
-              const volume=bridge.media.getLocalVolume?.(entry.descriptor.ownerId,'stream') ?? 100;
-              video.volume=Math.max(0,Math.min(1,volume/100));
-              video.muted=entry.local || Boolean(bridge.media.isLocalMute?.(entry.descriptor.ownerId,'stream'));
-            };
-            updateAudio();bridge.media.addChangeListener?.(updateAudio);
-            video.play().catch(()=>report('O Discord bloqueou a reprodução automática. Clique na área do vídeo para reproduzir.'));
-            return()=>{bridge.media.removeChangeListener?.(updateAudio);video.srcObject=null;};
-          },[entry.stream]);
-          return bridge.React.createElement('video',{
-            ref, className:nativeProps.className, autoPlay:true, playsInline:true, muted:entry.local,
-            style:{...nativeProps.style,width:'100%',height:'100%',objectFit:'contain'},
-            onLoadedData:()=>nativeProps.onReady?.(),
-            onClick:()=>ref.current?.play().catch(error=>report(error.message)),
-            onDoubleClick:nativeProps.onDoubleClick,onContextMenu:nativeProps.onContextMenu
-          });
-        };
-        this.dispatcher._actionHandlers._invalidateCaches();
-        this.ready=true;
-        const subscribe=(type,callback)=>{this.dispatcher.subscribe(type,callback);this.subscriptionRemovers.push(()=>this.dispatcher.unsubscribe?.(type,callback));};
-        subscribe('STREAM_CLOSE',e=>{if(window.__zapEnabled)this.defer(()=>this.stop(e.streamKey));});
-        subscribe('STREAM_UPDATE_SETTINGS',e=>{if(window.__zapEnabled)this.defer(()=>this.updateQuality(e));});
-        this.service.on('streamAvailable',({channelId,broadcasterUserId})=>{
-          const descriptor=this.descriptor(channelId,broadcasterUserId),key=this.key(descriptor);
-          if(!this.records.has(key))this.records.set(key,{descriptor,stream:null,local:false});
-          this.changed();
-        });
-        this.service.on('remoteStream',stream=>this.publish(stream,false));
-        this.service.on('streamStopped',()=>{this.clearRemote();if(!this.service.localStream && this.pendingStart)this.stop();});
-        this.service.on('statusChange',event=>{if(['error','warning'].includes(event.status))report(event.message);});
-        return true;
-      } catch(error){this.restore();report('Integração nativa incompatível: '+error.message);return false;}
-    }
-    restore(){for(const undo of this.restores.reverse())undo();this.restores=[];this.dispatcher._actionHandlers._invalidateCaches?.();this.ready=false;}
-    async handleAction(event){
-      if(!this.ready)return;
-      if(event.type==='STREAM_START'){
-        this.pendingStart=event;await this.maybeStart();
-      }else if(event.type==='STREAM_WATCH'){
-        const record=this.records.get(event.streamKey);
-        if(!record){report('Esta transmissão não está disponível no seu backend. Os dois participantes precisam do mod.');return;}
-        if(record.stream){this.publish(record.stream,record.local,record.descriptor);return;}
-        await this.service.subscribeToStream(record.descriptor.channelId,this.currentUser().id);
-      }else if(event.type==='STREAM_STOP')this.stop(event.streamKey);
-      else if(event.type==='STREAM_SET_PAUSED')for(const track of this.service.localStream?.getVideoTracks() || [])track.enabled=!event.paused;
-    }
-    async maybeStart(){
-      const source=this.settings?.desktopSettings?.sourceId;
-      if(!source){if(this.service.localStream || this.service.startPromise)this.stop();return;}
-      if(!this.pendingStart)return;
-      const start=this.pendingStart, user=this.currentUser();
-      if(!user || start.channelId!==this.channel())return;
-      if(this.service.localStream && this.startedSource===source){await this.updateQuality(this.settings.qualityOptions);return;}
-      if(this.service.startPromise)return;
-      if(this.service.localStream)this.service.stopBroadcast();
-      const quality=this.settings.qualityOptions || {resolution:720,frameRate:30};
-      window.__zapCaptureSourceId=source;
-      window.__zapCaptureOptions={width:Math.round(quality.resolution*16/9),height:quality.resolution,frameRate:quality.frameRate,audio:this.settings.desktopSettings.sound!==false};
-      this.startedSource=source;
-      try {
-        const stream=await this.service.startBroadcast(start.channelId,user.id);
-        if(this.settings?.desktopSettings?.sourceId!==source){this.service.stopBroadcast();this.startedSource=null;await this.maybeStart();return;}
-        this.publish(stream,true,this.descriptor(start.channelId,user.id,start.guildId));
-      }catch(error){this.startedSource=null;this.stop();report('Falha ao capturar a tela selecionada no Discord: '+error.message);}
-    }
-    publish(stream,local,descriptor){
-      const owner=local?this.currentUser()?.id:this.service.broadcasterUserId;
-      if(!descriptor)descriptor=this.descriptor(this.service.activeChannelId,owner);
-      if(!descriptor.ownerId||!descriptor.channelId)return;
-      const key=this.key(descriptor),videoId='zap:'+key;
-      const entry={stream,local,descriptor};this.records.set(key,entry);this.videoSources.set(videoId,entry);
-      this.defer(()=>{
-        this.dispatch({type:'STREAM_CREATE',streamKey:key,region:'custom',viewerIds:[],paused:false});
-        this.dispatch({type:'RTC_CONNECTION_VIDEO',userId:descriptor.ownerId,guildId:descriptor.guildId,streamId:videoId,context:'stream'});
-        this.changed();
-      });
-    }
-    async updateQuality(options){
-      const track=this.service.localStream?.getVideoTracks()[0];if(!track||!options)return;
-      const constraints={};if(Number.isFinite(options.resolution))constraints.height={ideal:options.resolution};if(Number.isFinite(options.frameRate))constraints.frameRate={ideal:options.frameRate};
-      if(Object.keys(constraints).length)await track.applyConstraints(constraints);
-    }
-    remove(key,keepAvailable=false){
-      const record=this.records.get(key);if(!record)return;
-      if(keepAvailable)this.records.set(key,{descriptor:record.descriptor,stream:null,local:false});else this.records.delete(key);
-      this.videoSources.delete('zap:'+key);
-      this.defer(()=>{
-        this.dispatch({type:'RTC_CONNECTION_VIDEO',userId:record.descriptor.ownerId,guildId:record.descriptor.guildId,streamId:null,context:'stream'});
-        this.dispatch({type:'STREAM_DELETE',streamKey:key,unavailable:false});this.changed();
-      });
-    }
-    stop(key){
-      const own=this.currentUser()?.id;
-      const record=key?this.records.get(key):null;
-      if(!key||record?.local||key.endsWith(':'+own)){
-        this.pendingStart=null;this.settings=null;this.startedSource=null;this.service.stopBroadcast();
-        for(const [k,r]of this.records)if(r.local)this.remove(k);
-      }else{this.service.stopViewing();this.remove(key,true);}
-    }
-    clearRemote(){for(const [key,record]of this.records)if(!record.local)this.remove(key);}
-    leave(){this.stop();this.service.leaveChannel();for(const key of [...this.records.keys()])this.remove(key);}
+        }
+        const u = userStore?.getCurrentUser?.();
+        if (u) {
+          Object.defineProperty(u, 'isDeveloper', { get: () => true, configurable: true });
+          Object.defineProperty(u, 'isStaff', { get: () => true, configurable: true });
+        }
+      } catch (e) {}
+    };
+    try { dispatcher.subscribe('CONNECTION_OPEN', reapply); } catch {}
+    try { dispatcher.subscribe('CURRENT_USER_UPDATE', reapply); } catch {}
+    try { dispatcher.subscribe('APEX_EXPERIMENTS_FETCH_SUCCESS', reapply); } catch {}
   }
 
-  if(!window.__zapWebRTCInstance && enabled && window.WebRTCService)window.__zapWebRTCInstance=new window.WebRTCService();
-  const service=window.__zapWebRTCInstance;
-  if(enabled && service && dispatcher && !window.__zapNativeBridge?.ready){
-    const bridge=new NativeStreamBridge({dispatcher,userStore,channelStore,selected,media,streams,videoStore,React},service);
-    if(bridge.install()){window.__zapNativeBridge=bridge;service.connectSignaling();}
+  // 3. Inject CSS to hide Discord Error 2012 / "Transmissão pausada" overlays
+  if (typeof document !== 'undefined' && !document.getElementById('zap-native-stream-fix')) {
+    const style = document.createElement('style');
+    style.id = 'zap-native-stream-fix';
+    style.textContent = `
+      /* Oculta mensagens oficiais de Erro 2012 e transmissão pausada */
+      [class*="videoOverlay_"],
+      [class*="streamPaused_"],
+      [class*="callAvatarStatus_"],
+      [class*="streamNotice_"],
+      div[class*="noticeRegionBlocked_"],
+      div:has(> [class*="streamPaused_"]) {
+        display: none !important;
+      }
+      /* Assegura que o elemento de vídeo ocupe o layout completo com controles nativos */
+      div[class*="videoWrapper_"] video,
+      div[class*="videoContainer_"] video,
+      div[class*="tile_"] video {
+        object-fit: contain !important;
+        width: 100% !important;
+        height: 100% !important;
+        display: block !important;
+      }
+    `;
+    if (document.head) document.head.appendChild(style);
   }
-  const bridge=window.__zapNativeBridge;
-  if(!enabled){bridge?.leave();bridge?.restore();service?.destroy();}
-  if(enabled && bridge?.ready){
-    const channel=bridge.channel();
-    if(channel!==bridge.lastChannel && (!channel || bridge.currentUser())){
-      bridge.lastChannel=channel;bridge.leave();
-      if(channel && bridge.currentUser())service.subscribeToStream(channel,bridge.currentUser().id).catch(error=>report(error.message));
+
+  // 4. Inicializa WebRTCService desacoplado do Discord
+  const WebRTCServiceClass = window.WebRTCService;
+  if (WebRTCServiceClass && !window.__zapWebRTCInstance) {
+    window.__zapWebRTCInstance = new WebRTCServiceClass({
+      signalingUrl: ZAP_SIGNALING,
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }]
+    });
+
+    const service = window.__zapWebRTCInstance;
+    service.connectSignaling();
+
+    service.on('remoteStream', (stream) => {
+      console.log('[DiscordMod] Novo stream remoto recebido via WebRTCService!', stream);
+      attachStreamToNativePlayer(stream, false);
+    });
+
+    service.on('streamStopped', () => {
+      console.log('[DiscordMod] Transmissão remota encerrada.');
+      detachStreamFromNativePlayer();
+    });
+  }
+
+  // 5. Interceptação da Camada de Estado / Dispatcher
+  if (dispatcher && !window.__zapDispatcherIntercepted) {
+    window.__zapDispatcherIntercepted = true;
+    const originalDispatch = dispatcher.dispatch.bind(dispatcher);
+
+    dispatcher.dispatch = function (event) {
+      if (!event || typeof event !== 'object') {
+        return originalDispatch(event);
+      }
+
+      const service = window.__zapWebRTCInstance;
+      const voiceChannelId = event.channelId ||
+        (event.streamKey ? event.streamKey.split(':')[2] : null) ||
+        getActiveVoiceChannelId();
+      const currentUser = userStore?.getCurrentUser?.();
+
+      // Intercepta ação de iniciar transmissão nativa (Go Live)
+      if (
+        event.type === 'STREAM_START' ||
+        event.type === 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE'
+      ) {
+        const hasSource = event.type === 'STREAM_START' ||
+          Boolean(event.desktopDescription?.id || event.sourceId || event.desktopDescription);
+        const targetChannelId = event.channelId || voiceChannelId;
+        console.log('[DiscordMod Dispatcher] Go Live iniciado:', event.type, 'channelId:', targetChannelId);
+        if (service && targetChannelId && currentUser) {
+          if (hasSource) {
+            service.startBroadcast(targetChannelId, currentUser.id)
+              .then(stream => {
+                console.log('[DiscordMod] Transmissão iniciada! Vinculando preview local no player...');
+                attachStreamToNativePlayer(stream, true);
+              })
+              .catch(err => {
+                console.error('[DiscordMod] Falha ao iniciar transmissão no WebRTCService:', err);
+              });
+          } else {
+            service.stopBroadcast();
+            detachStreamFromNativePlayer();
+          }
+        }
+      }
+
+      // Encerramento de transmissão do usuário local
+      if (event.type === 'STREAM_STOP') {
+        if (event.streamKey && currentUser?.id && event.streamKey.endsWith(currentUser.id)) {
+          console.log('[DiscordMod Dispatcher] Transmissão local finalizada.');
+          if (service) service.stopBroadcast();
+          detachStreamFromNativePlayer();
+        }
+      }
+
+      // Intercepta clique para assistir stream de participante
+      if (event.type === 'STREAM_WATCH') {
+        console.log('[DiscordMod Dispatcher] Interceptado pedido para assistir stream. Canal:', voiceChannelId);
+        if (service && voiceChannelId && currentUser) {
+          service.subscribeToStream(voiceChannelId, currentUser.id);
+        }
+      }
+
+      // Intercepta saída de canal de voz
+      if (event.type === 'VOICE_CHANNEL_SELECT' && !event.channelId) {
+        console.log('[DiscordMod Dispatcher] Usuário saiu do canal de voz.');
+        if (service) {
+          service.leaveChannel();
+          service.stopBroadcast();
+          detachStreamFromNativePlayer();
+        }
+      }
+
+      // Suprime o Erro 2012 e estados de desconexão da mídia oficial do Discord
+      if (
+        (event.type === 'RTC_CONNECTION_STATE' && (event.errorCode === 2012 || event.state === 'RTC_DISCONNECTED')) ||
+        (event.type === 'MEDIA_ENGINE_CONNECTION_STATE' && event.errorCode === 2012)
+      ) {
+        console.warn('[DiscordMod Dispatcher] Suprimido disparo de Erro 2012 oficial:', event.type);
+        return;
+      }
+
+      return originalDispatch(event);
+    };
+  }
+
+  // 6. Integração do Player com o Ciclo de Vida do React / DOM
+  function attachStreamToNativePlayer(stream, isLocal = false) {
+    if (!stream || typeof document === 'undefined') return;
+    if (!isLocal) {
+      window.__activeMediaStream = stream;
+    } else {
+      window.__localMediaStream = stream;
+    }
+
+    // Remove qualquer aviso visual residual no container
+    const staleAlerts = document.querySelectorAll('[class*="streamPaused_"], [class*="videoOverlay_"]');
+    staleAlerts.forEach(el => el.remove());
+
+    // Localiza elementos <video> ativos (ignorando tags dummy de 2x2 do Discord)
+    const videoElements = Array.from(document.querySelectorAll('video')).filter(v => {
+      const isDummy = v.width === 2 || v.height === 2 || (v.offsetWidth < 50 && v.offsetHeight < 50 && v.offsetWidth > 0);
+      return !isDummy;
+    });
+
+    let attached = false;
+    for (const video of videoElements) {
+      if (video) {
+        if (video.srcObject !== stream) video.srcObject = stream;
+        video.muted = isLocal;
+        video.volume = isLocal ? 0 : 1.0;
+        video.play().catch(e => console.warn('[DiscordMod] Video.play aviso:', e));
+        attached = true;
+      }
+    }
+
+    // Se o Discord ainda não montou tag <video> na célula da transmissão, injeta nosso player nativo
+    if (!attached) {
+      const container = document.querySelector('[class*="videoWrapper_"], [class*="videoContainer_"], [class*="tile_"]');
+      if (container) {
+        let player = document.getElementById('zap-custom-video-player');
+        if (!player) {
+          player = document.createElement('video');
+          player.id = 'zap-custom-video-player';
+          player.autoplay = true;
+          player.playsInline = true;
+          player.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:45;';
+          container.appendChild(player);
+        }
+        player.srcObject = stream;
+        player.muted = isLocal;
+        player.volume = isLocal ? 0 : 1.0;
+        player.play().catch(() => {});
+      }
     }
   }
-  // Compatibility failure blocks only the share button; it never opens an alternate UI.
-  if(typeof document!=='undefined'&&!window.__zapNativeButtonGuard){
-    window.__zapNativeButtonGuard=true;
-    document.addEventListener('click',event=>{
-      if(!window.__zapEnabled)return;
-      const button=event.target?.closest?.('button[aria-label="Compartilhe sua tela"], button[aria-label="Share Your Screen"], button[aria-label="Compartilhar sua tela"], [role="button"][aria-label="Compartilhe sua tela"], [role="button"][aria-label="Share Your Screen"]');
-      if(button && (!window.__zapNativeBridge?.ready || service?.ws?.readyState!==1)){
-        event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();
-        report(window.__zapNativeBridge?.ready?'Backend desconectado. Aguarde a reconexão.':'A integração nativa ainda não está pronta nesta versão do Discord.');
+
+  function detachStreamFromNativePlayer() {
+    if (typeof document === 'undefined') return;
+    window.__activeMediaStream = null;
+    window.__localMediaStream = null;
+    const videoElements = document.querySelectorAll('video');
+    for (const video of videoElements) {
+      if (video && video.srcObject) {
+        video.srcObject = null;
       }
-    },true);
+    }
+    const customPlayer = document.getElementById('zap-custom-video-player');
+    if (customPlayer) customPlayer.remove();
   }
-  return {status:enabled?(bridge?.ready?'native-adapter-ready':verified?'applied':'waiting-native-adapter'):'disabled',verified,
-    integration:{version:window.__DISCORD_MOD_VERSION__,nativeAdapter:Boolean(bridge?.ready),signalingState:service?.ws?.readyState,capturing:Boolean(service?.localStream),receiving:Boolean(service?.remoteStream),peerState:service?.viewerPc?.connectionState,lastError:window.__zapLastError}};
+
+  // Observador contínuo de montagem de nós <video> no DOM (Resiliência a re-render do React)
+  if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined' && !window.__zapVideoObserver) {
+    window.__zapVideoObserver = new MutationObserver(() => {
+      const streamToApply = window.__activeMediaStream || window.__localMediaStream;
+      const isLocal = !window.__activeMediaStream && Boolean(window.__localMediaStream);
+
+      if (streamToApply) {
+        attachStreamToNativePlayer(streamToApply, isLocal);
+      }
+
+      // Limpeza contínua de banners de Erro 2012 gerados dinamicamente
+      const errorBoxes = document.querySelectorAll('div[role="alert"], [class*="streamPaused_"], div[class*="emptyState_"], div[class*="streamNotice_"]');
+      errorBoxes.forEach(el => {
+        const text = el.textContent || '';
+        if (text.includes('2012') || text.includes('transmissão não iniciou') || el.className?.includes?.('streamPaused_')) {
+          el.remove();
+        }
+      });
+    });
+
+    if (document.body) {
+      window.__zapVideoObserver.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+    }
+  }
+
+  // Hook no botão oficial do monitor no painel de voz
+  if (typeof document !== 'undefined' && !window.__zapButtonHookRegistered) {
+    window.__zapButtonHookRegistered = true;
+    document.addEventListener('click', (e) => {
+      const btn = e.target?.closest?.('button[aria-label="Compartilhe sua tela"], button[aria-label="Share Your Screen"], button[aria-label="Compartilhar sua tela"]');
+      if (btn) {
+        const service = window.__zapWebRTCInstance;
+        if (service?.localStream) {
+          service.stopBroadcast();
+          detachStreamFromNativePlayer();
+        }
+      }
+    }, true);
+  }
+
+  // Verificação de sincronização periódica de canal (a cada 2s)
+  if (typeof setInterval !== 'undefined' && !window.__zapChannelSyncInterval) {
+    let lastVoiceChannelId = null;
+    window.__zapChannelSyncInterval = setInterval(() => {
+      const currentChannelId = getActiveVoiceChannelId();
+      const currentUser = userStore?.getCurrentUser?.();
+      const service = window.__zapWebRTCInstance;
+
+      if (currentChannelId !== lastVoiceChannelId) {
+        lastVoiceChannelId = currentChannelId;
+        if (service) {
+          if (currentChannelId && currentUser) {
+            console.log('[DiscordMod] Canal de voz ativo:', currentChannelId);
+            service.subscribeToStream(currentChannelId, currentUser.id);
+          } else {
+            console.log('[DiscordMod] Saiu do canal de voz.');
+            service.leaveChannel();
+            detachStreamFromNativePlayer();
+          }
+        }
+      }
+    }, 2000);
+  }
+
+  const current = store.getClientOverrides()?.[primaryExperiment];
+  const verified = enabled ? current?.variantId === -1 : current == null;
+
+  return {
+    status: verified ? (enabled ? 'applied' : 'disabled') : 'unverified',
+    verified,
+    experimentName: primaryExperiment,
+    appliedList,
+    devUnlocked
+  };
 })();

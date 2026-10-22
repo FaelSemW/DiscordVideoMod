@@ -1,9 +1,10 @@
 'use strict';
 
 /**
- * Servidor de SinalizaÃ§Ã£o WebRTC para o Discord Mod
- * Permite que usuÃ¡rios transmitam e assistam telas em 1080p60
- * de forma 100% desacoplada dos gateways de mÃ­dia da Discord Inc.
+ * Servidor de Sinalização WebRTC para o Discord Mod
+ * Permite que usuários transmitam e assistam telas em 1080p60
+ * de forma 100% desacoplada dos gateways de mídia da Discord Inc.
+ * Compatível com Render Cloud (24/7 gratuito), VPS ou execução local.
  */
 
 const http = require('http');
@@ -27,7 +28,7 @@ const server = http.createServer((req, res) => {
         path.join(__dirname, 'mod')
       ];
       const modDir = candidates.find(d => fs.existsSync(d)) || candidates[0];
-      let version = '1.0.0';
+      let version = '1.0.0-stable';
       try {
         const cfg = JSON.parse(fs.readFileSync(path.join(modDir, 'config.json'), 'utf8'));
         if (cfg.version) version = cfg.version;
@@ -59,7 +60,7 @@ const server = http.createServer((req, res) => {
   }
 
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('Discord Mod Signaling Server - Online');
+  res.end('Discord Mod Signaling Server - Online no Render Cloud 24/7');
 });
 
 const wss = new WebSocketServer({ server });
@@ -90,17 +91,18 @@ wss.on('connection', (ws) => {
       registeredUser = userId;
       if (!signalingChannels.has(channelId)) signalingChannels.set(channelId, new Map());
       signalingChannels.get(channelId).set(userId, ws);
-      activeOffers.set(channelId, { broadcasterUserId: userId, sdpOffer, protocolVersion: msg.protocolVersion });
-      console.log(`[signaling] TransmissÃ£o iniciada no canal ${channelId} por ${userId}`);
+      activeOffers.set(channelId, { broadcasterUserId: userId, sdpOffer });
+      console.log(`[signaling] Transmissão iniciada no canal ${channelId} por ${userId}`);
 
       const peers = signalingChannels.get(channelId);
       for (const [subId, subWs] of peers) {
         if (subId !== userId && subWs.readyState === 1) {
-          if (msg.protocolVersion === 2) {
-              ws.send(JSON.stringify({ type: 'stream:viewer-joined', channelId, subscriberUserId: subId }));
-            } else {
-              subWs.send(JSON.stringify({ type: 'stream:available', channelId, broadcasterUserId: userId, sdpOffer }));
-            }
+          subWs.send(JSON.stringify({
+            type: 'stream:available',
+            channelId,
+            broadcasterUserId: userId,
+            sdpOffer
+          }));
         }
       }
     } else if (type === 'stream:subscribe') {
@@ -112,13 +114,13 @@ wss.on('connection', (ws) => {
 
       const active = activeOffers.get(channelId);
       if (active && active.broadcasterUserId !== userId) {
-        if (active.protocolVersion !== 2) ws.send(JSON.stringify({ type: 'stream:available', channelId, broadcasterUserId: active.broadcasterUserId, sdpOffer: active.sdpOffer }));
-        const broadcaster = signalingChannels.get(channelId).get(active.broadcasterUserId);
-        if (broadcaster?.readyState === 1) broadcaster.send(JSON.stringify({ type: 'stream:viewer-joined', channelId, subscriberUserId: userId }));
+        ws.send(JSON.stringify({
+          type: 'stream:available',
+          channelId,
+          broadcasterUserId: active.broadcasterUserId,
+          sdpOffer: active.sdpOffer
+        }));
       }
-    } else if (type === 'stream:offer') {
-      const target = signalingChannels.get(channelId)?.get(targetUserId);
-      if (target?.readyState === 1) target.send(JSON.stringify({ type: 'stream:offer', channelId, broadcasterUserId: userId, sdpOffer }));
     } else if (type === 'stream:answer') {
       const peers = signalingChannels.get(channelId);
       if (peers && targetUserId) {
@@ -159,7 +161,6 @@ wss.on('connection', (ws) => {
         }
       }
     } else if (type === 'stream:stop') {
-        if (activeOffers.get(channelId)?.broadcasterUserId !== userId) return;
       if (activeOffers.get(channelId)?.broadcasterUserId === userId) {
         activeOffers.delete(channelId);
       }
@@ -209,6 +210,20 @@ setInterval(() => {
   }
 }, 30000);
 
+// Auto Keep-Alive para Render Cloud (mantém o plano gratuito ativo 24/7)
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL;
+if (RENDER_EXTERNAL_URL) {
+  console.log(`[Render Keep-Alive] Monitoramento ativo para ${RENDER_EXTERNAL_URL} a cada 10 min.`);
+  setInterval(() => {
+    try {
+      const client = RENDER_EXTERNAL_URL.startsWith('https') ? require('https') : require('http');
+      client.get(`${RENDER_EXTERNAL_URL}/health`, (res) => {
+        console.log(`[Render Keep-Alive] Ping executado: status ${res.statusCode}`);
+      }).on('error', () => {});
+    } catch {}
+  }, 10 * 60 * 1000);
+}
+
 server.listen(PORT, () => {
-  console.log(`[DiscordMod Signaling] Servidor ativo na porta ${server.address().port}`);
+  console.log(`[DiscordMod Signaling] Servidor ativo na porta ${PORT}`);
 });
