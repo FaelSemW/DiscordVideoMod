@@ -1,34 +1,78 @@
 const {test}=require('node:test');
-const assert=require('node:assert/strict');
-const fs=require('node:fs'),vm=require('node:vm');
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync(__dirname+'/renderer.js','utf8').replace('__RAFA_ENABLED__','true');
-function harness(online=true){
-  const elements=new Map(),events={},subscriptions=[],calls=[];
-  function element(tag){return {tagName:tag,style:{},children:[],isConnected:false,value:'',setAttribute(){},addEventListener(){},appendChild(child){this.children.push(child);child.parentElement=this;child.isConnected=true;if(child.id)elements.set(child.id,child);if(tag==='select'&&!this.value)this.value=child.value;},remove(){this.isConnected=false;if(this.id)elements.delete(this.id);},play:async()=>{}};}
-  const document={body:element('body'),head:element('head'),createElement:element,getElementById:id=>elements.get(id),querySelectorAll:()=>[],addEventListener:(type,fn)=>events[type]=fn};
-  let channel='123';const overrides={};
-  const dispatcher={_actionHandlers:{},subscribe:(type,fn)=>subscriptions.push({type,fn}),dispatch:e=>{overrides[e.experimentName]={variantId:e.variantId};}};
-  const chunks=[];chunks.push=e=>{Array.prototype.push.call(chunks,e);e[2]({m:{},c:{a:{exports:{dispatcher,store:{getName:()=> 'ApexExperimentStore',getClientOverrides:()=>overrides},user:{getName:()=> 'UserStore',getCurrentUser:()=>({id:'user'})},channel:{getVoiceChannelId:()=>channel}}}}});};
-  const service={ws:{readyState:online?1:0},connectSignaling(){calls.push('connect');},async startBroadcast(...args){calls.push(args);return{};},stopBroadcast(){calls.push('stop');}};
-  const window={webpackChunkdiscord_app:chunks,__zapWebRTCInstance:service,DiscordNative:{desktopCapture:{async getDesktopCaptureSources(){return[{id:'screen:7:0',name:'Tela escolhida'}];}}}};
-  vm.runInNewContext(source,{window,document,console});
-  function clickNative(){let prevented=0;events.click({target:{closest:()=>({})},preventDefault(){prevented++;},stopPropagation(){prevented++;},stopImmediatePropagation(){prevented++;}});return prevented;}
-  return{window,elements,calls,subscriptions,clickNative,setChannel:id=>channel=id};
+const tick=()=>new Promise(setImmediate);
+function harness({compatible=true}={}){
+ const calls=[],events=[],listeners={},nodes=new Map();const overrides={};
+ const node=(name,actions)=>{const n={name,actionHandler:actions};nodes.set(name,n);return n;};
+ node('GatewayConnectionStore',Object.fromEntries(['STREAM_START','STREAM_WATCH','STREAM_STOP','STREAM_CREATE','STREAM_SET_PAUSED','VOICE_STATE_UPDATE'].map(t=>[t,()=>calls.push('official:'+t)])));
+ if(compatible)node('StreamRTCConnectionStore',Object.fromEntries(['STREAM_START','STREAM_CREATE','STREAM_SERVER_UPDATE','STREAM_DELETE','STREAM_UPDATE'].map(t=>[t,()=>calls.push('rtc:'+t)])));
+ node('MediaEngineStore',{'MEDIA_ENGINE_SET_GO_LIVE_SOURCE':()=>calls.push('native-capture')});
+ node('ApplicationStreamingStore',Object.fromEntries(['STREAM_CREATE','STREAM_UPDATE','STREAM_DELETE'].map(t=>[t,()=>calls.push('ui:'+t)])));
+ const dispatcher={_actionHandlers:{_nodes:nodes,_invalidateCaches(){calls.push('invalidate');}},subscribe(t,fn){(listeners[t]??=[]).push(fn);},unsubscribe(){},dispatch(e){events.push(e);if(e.type==='APEX_EXPERIMENT_OVERRIDE_CREATE')overrides[e.experimentName]={variantId:e.variantId};for(const n of nodes.values())n.actionHandler[e.type]?.(e);for(const fn of listeners[e.type]||[])fn(e);}};
+ const streams={getName:()=> 'ApplicationStreamingStore',emitChange(){},getAllApplicationStreams:()=>[],getAllApplicationStreamsForChannel:()=>[],getStreamForUser:()=>null,getAnyStreamForUser:()=>null,getAnyDiscoverableStreamForUser:()=>null};
+ const NativeVideo=function NativeVideo(){};
+ const media={getName:()=> 'MediaEngineStore',getGoLiveSource:()=>null,getVideoComponent:()=>NativeVideo,emitChange(){},getLocalVolume:()=>100};
+ let channel='123';
+ const user={getName:()=> 'UserStore',getCurrentUser:()=>({id:'10'})};
+ const selected={getName:()=> 'SelectedChannelStore',getVoiceChannelId:()=>channel};
+ const channelStore={getName:()=> 'ChannelStore',getChannel:()=>({getGuildId:()=> '99'})};
+ const React={createElement:(type,props)=>({type,props}),useEffect(){},useRef:()=>({current:null})};
+ const track={readyState:'live',kind:'video',applyConstraints:async c=>calls.push(['constraints',c]),stop(){}};
+ const stream={getTracks:()=>[track],getVideoTracks:()=>[track]};
+ const serviceListeners={};
+ const service={ws:{readyState:1},localStream:null,activeChannelId:null,on(t,fn){serviceListeners[t]=fn;},emit(t,e){serviceListeners[t]?.(e);},connectSignaling:async()=>true,async startBroadcast(c,u){calls.push(['capture',c,u]);this.activeChannelId=c;this.localStream=stream;return stream;},stopBroadcast(){calls.push('stop');this.localStream=null;},stopViewing(){calls.push('stopViewing');},leaveChannel(){this.activeChannelId=null;},async subscribeToStream(c,u){this.activeChannelId=c;calls.push(['subscribe',c,u]);}};
+ const elements=new Map();let click;
+ const document={body:{appendChild(e){elements.set(e.id,e);}},getElementById:id=>elements.get(id),createElement:()=>({style:{},setAttribute(){},addEventListener(){}}),addEventListener(type,fn){if(type==='click')click=fn;}};
+ const modules={a:{exports:{dispatcher,media,streams,user,selected,channelStore,React,video:{getName:()=> 'VideoStreamStore',emitChange(){}},experiment:{getName:()=> 'ApexExperimentStore',getClientOverrides:()=>overrides}}}};
+ const chunks=[];chunks.push=e=>{Array.prototype.push.call(chunks,e);e[2]({m:{},c:modules});};
+ const window={webpackChunkdiscord_app:chunks,__zapWebRTCInstance:service};const context=vm.createContext({window,document,console});
+ const result=vm.runInContext(source,context);calls.length=0;events.length=0;
+ return{window,service,calls,events,dispatcher,media,streams,track,stream,NativeVideo,elements,result,setChannel:c=>channel=c,rerun:()=>vm.runInContext(source,context),click:()=>{let count=0;click({target:{closest:()=>({})},preventDefault(){count++;},stopPropagation(){count++;},stopImmediatePropagation(){count++;}});return count;}};
 }
-test('offline native click is stopped before Discord and explains failure',()=>{
- const h=harness(false);assert.equal(h.clickNative(),3);assert.deepEqual(h.calls,['connect']);assert.match(h.elements.get('zap-stream-error').textContent,/desconectado/);
+const settings={desktopSettings:{sourceId:'screen:7:0',sound:false},qualityOptions:{resolution:1080,frameRate:60},context:'stream'};
+const start={type:'STREAM_START',streamType:'guild',guildId:'99',channelId:'123'};
+test('native picker remains native; no separate buttons, dialog or player is created',()=>{
+ const h=harness();assert.equal(h.result.integration.nativeAdapter,true);assert.equal(h.click(),0);assert.equal(h.elements.size,0);
 });
-test('online native click opens explicit picker without starting native Go Live or automatic capture',async()=>{
- const h=harness();assert.equal(h.clickNative(),3);await new Promise(setImmediate);
- assert.equal(h.calls.length,0);assert.ok(h.elements.get('zap-capture-picker'));
- assert.equal(h.subscriptions.some(s=>['STREAM_START','MEDIA_ENGINE_SET_GO_LIVE_SOURCE','STREAM_WATCH'].includes(s.type)),false);
- const picker=h.elements.get('zap-capture-picker');const choice=picker.children.find(c=>c.textContent==='Tela escolhida');await choice.onclick();
- assert.deepEqual(Array.from(h.calls[0]),['123','user']);assert.equal(h.window.__zapCaptureSourceId,'screen:7:0');
- assert.equal(h.window.__zapCaptureOptions.width,1920);assert.equal(h.window.__zapCaptureOptions.frameRate,60);
- assert.ok(h.elements.get('zap-custom-video-player'));
+test('settings payload and native start drive custom capture, without gateway or native RTC',async()=>{
+ const h=harness();h.dispatcher.dispatch({type:'MEDIA_ENGINE_SET_GO_LIVE_SOURCE',settings});await tick();assert.equal(h.calls.some(c=>Array.isArray(c)&&c[0]==='capture'),false);
+ h.dispatcher.dispatch(start);await tick();await tick();
+ assert.equal(h.calls.filter(c=>Array.isArray(c)&&c[0]==='capture').length,1);assert.equal(h.calls.some(c=>typeof c==='string'&&(/official:|rtc:|native-capture/).test(c)),false);
+ assert.equal(h.window.__zapCaptureSourceId,'screen:7:0');assert.equal(h.window.__zapCaptureOptions.height,1080);assert.equal(h.window.__zapCaptureOptions.audio,false);
+ assert.ok(h.events.some(e=>e.type==='RTC_CONNECTION_VIDEO'&&e.streamId==='zap:guild:99:123:10'));
+ assert.equal(h.streams.getStreamForUser('10','99').channelId,'123');
 });
-test('changing channel during source selection cancels capture',async()=>{
- const h=harness();h.clickNative();await new Promise(setImmediate);h.setChannel('456');
- await h.elements.get('zap-capture-picker').children.find(c=>c.textContent==='Tela escolhida').onclick();
- assert.equal(h.calls.length,0);assert.match(h.elements.get('zap-stream-error').textContent,/canal mudou/);
+test('start before settings also waits for the actual native selection',async()=>{
+ const h=harness();h.dispatcher.dispatch(start);await tick();assert.equal(h.calls.some(c=>Array.isArray(c)&&c[0]==='capture'),false);
+ h.dispatcher.dispatch({type:'MEDIA_ENGINE_SET_GO_LIVE_SOURCE',settings});await tick();assert.equal(h.service.localStream,h.stream);
+});
+test('native video component receives custom MediaStream; camera stays native',async()=>{
+ const h=harness();h.dispatcher.dispatch(start);h.dispatcher.dispatch({type:'MEDIA_ENGINE_SET_GO_LIVE_SOURCE',settings});await tick();
+ const Component=h.media.getVideoComponent();const camera=Component({streamId:'official-camera'});assert.equal(camera.type,h.NativeVideo);
+ const video=Component({streamId:'zap:guild:99:123:10'});assert.equal(video.props.entry.stream,h.stream);
+ const element=video.type(video.props);assert.equal(element.type,'video');assert.equal(element.props.controls,undefined);
+});
+test('native quality and stop controls update the capture and remove stream metadata',async()=>{
+ const h=harness();h.dispatcher.dispatch(start);h.dispatcher.dispatch({type:'MEDIA_ENGINE_SET_GO_LIVE_SOURCE',settings});await tick();
+ h.dispatcher.dispatch({type:'STREAM_UPDATE_SETTINGS',resolution:720,frameRate:30});await tick();assert.ok(h.calls.some(c=>Array.isArray(c)&&c[0]==='constraints'&&c[1].height.ideal===720));
+ h.dispatcher.dispatch({type:'STREAM_STOP',streamKey:'guild:99:123:10'});await tick();assert.equal(h.service.localStream,null);assert.equal(h.streams.getStreamForUser('10','99'),null);
+ assert.equal(h.calls.includes('official:STREAM_STOP'),false);
+});
+test('missing native hooks fail closed, preserving the ordinary voice path',()=>{
+ const h=harness({compatible:false});assert.equal(h.result.integration.nativeAdapter,false);assert.equal(h.click(),3);
+ h.dispatcher.dispatch(start);assert.equal(h.calls.includes('official:STREAM_START'),false);
+ h.dispatcher.dispatch({type:'VOICE_STATE_UPDATE'});assert.ok(h.calls.includes('official:VOICE_STATE_UPDATE'));
+});
+test('viewer receives native stream metadata and native close clears reception',async()=>{
+ const h=harness();h.service.activeChannelId='123';h.service.broadcasterUserId='20';h.service.emit('remoteStream',h.stream);await tick();
+ assert.equal(h.streams.getStreamForUser('20','99').ownerId,'20');
+ h.dispatcher.dispatch({type:'STREAM_WATCH',streamKey:'guild:99:123:20'});await tick();assert.equal(h.calls.includes('official:STREAM_WATCH'),false);
+ h.dispatcher.dispatch({type:'STREAM_CLOSE',streamKey:'guild:99:123:20'});await tick();assert.ok(h.calls.includes('stopViewing'));assert.equal(h.streams.getStreamForUser('20','99').ownerId,'20');
+ h.dispatcher.dispatch({type:'STREAM_WATCH',streamKey:'guild:99:123:20'});await tick();assert.ok(h.calls.some(c=>Array.isArray(c)&&c[0]==='subscribe'));
+ h.service.emit('streamStopped');await tick();assert.equal(h.streams.getStreamForUser('20','99'),null);
+});
+test('injection is idempotent and leaving voice stops capture',async()=>{
+ const h=harness();const original=h.media.getVideoComponent;h.rerun();assert.equal(h.media.getVideoComponent,original);
+ h.dispatcher.dispatch(start);h.dispatcher.dispatch({type:'MEDIA_ENGINE_SET_GO_LIVE_SOURCE',settings});await tick();h.setChannel(null);h.rerun();await tick();assert.equal(h.service.localStream,null);
 });

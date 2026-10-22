@@ -1,3 +1,14 @@
+# 1.0.9 — transmissão na interface nativa
+
+- Remove os botões, seletor e player separados da 1.0.8. O site permanece apenas como backend de sinalização.
+- Corrige a leitura da seleção original: `settings.desktopSettings.sourceId`, qualidade e áudio.
+- Substitui as ações de conexão de transmissão no gateway e RTC oficiais, preservando voz normal e os controles da interface.
+- Entrega o MediaStream próprio ao componente de vídeo do Discord e registra metadados nos stores nativos.
+- Liga troca de qualidade, encerramento e nova visualização aos controles originais. Normaliza o sufixo Electron de IDs de fonte sem selecionar outro monitor.
+- 23 testes automatizados passam. Captura real, reprodução, popout e compatibilidade completa dos controles ainda precisam de teste entre os usuários. TURN continua não configurado no backend público.
+
+Atualizem os dois clientes e reiniciem completamente. Usem **Compartilhar sua tela** e a área de transmissão originais do Discord. Não abram outro site. O backend atual suporta uma transmissão por canal.
+
 # 1.0.8 — captura e player independentes
 
 - Botões próprios para transmitir/parar e assistir, com escolha explícita da fonte, resolução e FPS. O caminho próprio não inicia Go Live oficial.

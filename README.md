@@ -1,38 +1,39 @@
 # Discord Video Mod
 
-Mod experimental para Windows que captura uma tela ou janela e transmite por WebRTC próprio. A versão 1.0.8 usa controles e player do mod dentro da janela do Discord, sem iniciar o Go Live oficial por esse caminho.
+Mod experimental para usar a interface de transmissão do Discord com sinalização e WebRTC próprios. A versão 1.0.9 substitui a interface separada da 1.0.8 por um adaptador dos controles nativos.
 
 ## Instalação e uso
 
-1. Instale `DiscordModSetup.exe` da release mais recente nos dois computadores. Quem já usa o mod recebe os scripts pelo atualizador; encerre completamente e reabra o Discord após a atualização.
-2. Ambos entram no mesmo canal de voz.
-3. Quem transmite clica em **Transmitir / parar pelo site**, escolhe qualidade e uma tela ou janela na lista. O preview deve mostrar a imagem escolhida.
-4. Quem assiste clica em **Assistir pelo site**. Também há inscrição automática ao entrar no canal.
-5. Use os controles do vídeo para áudio e tela cheia. **Fechar / parar transmissão** encerra a captura local ou fecha a recepção.
+1. Atualize os dois computadores com `DiscordModSetup.exe` da release mais recente. Encerre completamente e reabra os dois clientes após atualizar.
+2. Entrem no mesmo canal de voz.
+3. Use **Compartilhar sua tela** do próprio Discord e escolha a fonte, qualidade e áudio no seletor original.
+4. A outra pessoa usa a transmissão exibida na chamada do Discord. O mod entrega o MediaStream ao componente de vídeo nativo, preservando o restante da interface.
+5. Use os controles originais para qualidade, volume e encerramento. Não é necessário abrir o site.
 
-O botão de compartilhar tela conhecido é interceptado; botões e atalhos de versões diferentes do Discord podem mudar. Para testar o caminho independente, use os botões do mod. Os controles oficiais de transmissão não gerenciam essa sessão. Voz, login e canais continuam sendo recursos do Discord.
+Não há botão flutuante, seletor paralelo ou player separado. Caso o adaptador não encontre os componentes esperados, o botão de compartilhar mostra uma mensagem de incompatibilidade, sem abrir outra interface.
 
-## Arquitetura e limites
+## O papel do backend
 
-- `wss://zaprecovery.online/signaling`: sinalização, ofertas, respostas e candidatos ICE.
-- O vídeo e o áudio seguem diretamente entre os computadores por WebRTC. O servidor HTTP não retransmite os quadros de vídeo.
-- A configuração de STUN/TURN é lida de `/api/ice` pelo processo Electron. Um servidor TURN precisa existir e estar configurado para oferecer retransmissão quando a rede impedir conexão direta. Em 22/10/2026, o endpoint público retornou somente STUN.
-- Uma transmissão por canal é suportada pelo backend atual. Transmissões simultâneas no mesmo canal ainda não são suportadas.
-- Resolução e FPS são preferências; a captura e a rede podem entregar menos. Áudio do sistema depende do Electron/Windows; falhas geram aviso e tentativa de vídeo sem áudio.
-- Não há garantia de eliminação de toda tela preta. Captura real e áudio entre dois computadores ainda precisam de validação dos usuários. Os testes automatizados usam simulações de captura/RTC e um servidor WebSocket real para sinalização.
+`wss://zaprecovery.online/signaling` negocia a sessão própria: ofertas, respostas e candidatos ICE. O site não fornece permissões aos servidores oficiais do Discord. O mod substitui as ações de conexão da transmissão no cliente.
 
-## Correções 1.0.8
+O áudio e o vídeo usam WebRTC direto entre os computadores. `/api/ice` fornece STUN/TURN; em 22/10/2026, o endpoint público ainda fornece somente STUN. Um servidor TURN operacional é necessário para retransmitir a mídia quando a rede impedir conexão direta. O túnel HTTP do site não realiza essa retransmissão.
 
-- Seleção explícita usando IDs reais de fontes Electron, sem escolher outro monitor silenciosamente.
-- Início independente de eventos do Go Live oficial; remoção do código que escondia erros e spinners globais do Discord.
-- Player próprio estável, com aviso de autoplay e diagnóstico de conexão sem quadros decodificados.
-- Evita destruir uma negociação ainda em andamento ao receber inscrição duplicada.
-- Timeout de conexão e mensagens distintas para captura, conexão e reprodução; limpeza dos timers ao encerrar.
-- Uso da configuração de ICE existente no backend, sem registrar credenciais nos logs.
+Login, canais e voz normal continuam no Discord. Ambos os participantes precisam do mod. O backend atual suporta uma transmissão por canal.
 
-## Código e testes
+## Integração 1.0.9
 
-`mod/main.cjs` injeta os scripts e integra a captura Electron; `mod/renderer.js` contém interface e integração de canal; `mod/webrtcService.js` contém captura e WebRTC; `server/signaling.js` é o backend independente.
+- Lê a fonte em `settings.desktopSettings.sourceId`, a qualidade em `settings.qualityOptions` e a opção de áudio do seletor original.
+- Aguarda tanto a seleção quanto `STREAM_START` antes de capturar.
+- Substitui somente as ações de transmissão de `GatewayConnectionStore` e `StreamRTCConnectionStore`; preserva as ações de voz.
+- Publica metadados locais para `ApplicationStreamingStore` e `VideoStreamStore`, sem falsificar atualizações de estado de voz.
+- Adapta `MediaEngineStore.getVideoComponent()` para entregar a mídia própria à área de vídeo original. As câmeras continuam com o componente original.
+- Liga qualidade, áudio e encerramento aos controles nativos. Fechar a recepção mantém a transmissão disponível para assistir novamente.
+
+O adaptador foi mapeado a partir do JavaScript público do Discord disponível em 22/10/2026. Esses detalhes internos podem mudar. Os testes automatizados verificam o contrato e a sinalização; não substituem uma chamada real entre os dois computadores. Compatibilidade visual, popout e todos os controles nativos ainda não foram validados em uso real. Não há garantia de resolução universal de tela preta.
+
+## Desenvolvimento
+
+`mod/main.cjs`: injeção e captura Electron; `mod/renderer.js`: adaptação nativa; `mod/webrtcService.js`: captura e transporte WebRTC; `server/signaling.js`: backend independente.
 
 Com Node.js e `ws` disponível:
 
@@ -41,12 +42,12 @@ node --test mod/webrtc.test.cjs mod/renderer.test.cjs server/signaling.test.cjs
 node mod/test.cjs
 ```
 
-Logs ficam em `runtime/video-mod.jsonl` da instalação. No instalador completo: `%LOCALAPPDATA%\DiscordMod\runtime\video-mod.jsonl`. O campo `verified` verifica somente o override do experimento, não a transmissão.
+Logs: `%LOCALAPPDATA%\DiscordMod\runtime\video-mod.jsonl`. `integration.nativeAdapter` indica que os componentes foram encontrados e adaptados. `verified` indica apenas o override do experimento; nenhum deles comprova vídeo recebido.
 
-Para compilar os instaladores no Windows:
+Compilação no Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer/build-installer.ps1 -ClientDir C:\caminho\client
 ```
 
-Consulte [CHANGELOG.md](CHANGELOG.md) para o histórico e [LICENSE](LICENSE) para a licença.
+Consulte [CHANGELOG.md](CHANGELOG.md) e [LICENSE](LICENSE).

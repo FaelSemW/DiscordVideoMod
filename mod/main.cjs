@@ -157,7 +157,7 @@ if (!global.__rafaVideoTestLoaded) {
               if (sources && sources.length > 0) {
                 let selected;
                 try { selected = await request.frame.executeJavaScript('window.__zapCaptureSourceId || null'); } catch {}
-                const target = selected && sources.find(s => s.id === selected);
+                const target = selected && (sources.find(s => s.id === selected) || sources.find(s => s.id === selected + ':0'));
                 if (!target) { log('capture-source-unavailable'); callback({}); return; }
                 log('capturing-source', { id: target.id, name: target.name });
                 callback({ video: target, ...(request.audioRequested ? { audio: 'loopback' } : {}) });

@@ -120,3 +120,14 @@ test('failed peer gives explicit network error and removes dead player', async (
   assert.equal(s.viewerPc,null);assert.equal(stops.length,1);
   assert.match(errors.at(-1).message,/TURN/);assert.equal(s.peerTimers.size,0);
 });
+test('native screen ID suffix is normalized without changing the chosen source', async () => {
+  let captured;
+  const stream={getVideoTracks:()=>[{addEventListener(){}}]};
+  const s=service({window:{__zapCaptureSourceId:'screen:7',__zapCaptureOptions:{width:1280,height:720,frameRate:30,audio:false},DiscordNative:{desktopCapture:{async getDesktopCaptureSources(){return [{id:'screen:0:0'},{id:'screen:7:0'}];}}}},navigator:{mediaDevices:{async getUserMedia(c){captured=c;return stream;}}}});
+  await s.startScreenCapture();assert.equal(captured.video.mandatory.chromeMediaSourceId,'screen:7:0');assert.equal(captured.audio,false);assert.equal(captured.video.mandatory.maxFrameRate,30);
+});
+test('native sound selection is respected by getDisplayMedia', async()=>{
+ let captured;const stream={getVideoTracks:()=>[{addEventListener(){}}]};
+ const s=service({window:{__zapCaptureSourceId:'screen:0:0',__zapCaptureOptions:{width:1280,height:720,frameRate:30,audio:false}},navigator:{mediaDevices:{async getDisplayMedia(c){captured=c;return stream;}}}});
+ await s.startScreenCapture();assert.equal(captured.audio,false);assert.equal(captured.video.height.ideal,720);
+});

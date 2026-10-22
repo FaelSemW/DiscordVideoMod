@@ -267,7 +267,7 @@ export class WebRTCService {
             height: { ideal: options.height },
             frameRate: { ideal: options.frameRate }
           },
-          audio: {
+          audio: options.audio === false ? false : {
             autoGainControl: false,
             echoCancellation: false,
             noiseSuppression: false,
@@ -292,10 +292,10 @@ export class WebRTCService {
       const sources = await getSources.call(desktop, { types: ['screen', 'window'] });
       if (sources && sources.length > 0) {
         const selected = window.__zapCaptureSourceId;
-        const target = sources.find(s => s.id === selected);
+        const target = sources.find(s => s.id === selected) || sources.find(s => s.id === selected + ':0');
         if (!target) throw new Error('A tela ou janela selecionada não está mais disponível. Selecione novamente.');
         const constraints = {
-          audio: { mandatory: { chromeMediaSource: 'desktop' } },
+          audio: options.audio === false ? false : { mandatory: { chromeMediaSource: 'desktop' } },
           video: {
             mandatory: {
               chromeMediaSource: 'desktop',
