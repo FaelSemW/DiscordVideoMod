@@ -154,7 +154,9 @@ if (!global.__rafaVideoTestLoaded) {
           ses.setDisplayMediaRequestHandler((request, callback) => {
             desktopCapturer.getSources({ types: ['screen', 'window'] }).then((sources) => {
               if (sources && sources.length > 0) {
-                callback({ video: sources[0], audio: 'loopback' });
+                const target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
+                log('capturing-source', { id: target.id, name: target.name });
+                callback({ video: target, audio: 'loopback' });
               } else {
                 callback({});
               }
@@ -227,13 +229,16 @@ if (!global.__rafaVideoTestLoaded) {
         }
 
         result.frames = frames.length;
-        if (result.status !== lastStatus || attempts % 10 === 0) {
+        if (result.status !== lastStatus || attempts % 10 === 0 || result.videoInfo) {
           log(result.status, { ...result, window: contents.id });
           lastStatus = result.status;
         }
 
-        if (result.verified) {
+        if (result.verified && attempts < 90) {
+          // Mantém verificação relaxada contínua a cada 4s para re-renders e diagnósticos
           stop();
+          timer = setInterval(tick, 4000);
+          timer.unref();
         } else if (++attempts >= 90) {
           stop();
           log('compatibility-timeout', { window: contents.id });

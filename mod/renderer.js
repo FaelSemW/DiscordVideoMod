@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
   const enabled = __RAFA_ENABLED__;
   const primaryExperiment = '2026-08-video-guard';
   const ZAP_SIGNALING = 'wss://zaprecovery.online/signaling';
@@ -480,11 +480,24 @@
   const current = store.getClientOverrides()?.[primaryExperiment];
   const verified = enabled ? current?.variantId === -1 : current == null;
 
+  const v = document.querySelector('video');
+  const activeStream = window.__activeMediaStream;
+  const localStream = window.__localMediaStream;
+
   return {
     status: verified ? (enabled ? 'applied' : 'disabled') : 'unverified',
     verified,
     experimentName: primaryExperiment,
     appliedList,
-    devUnlocked
+    devUnlocked,
+    videoInfo: {
+      count: document.querySelectorAll('video').length,
+      videoWidth: v?.videoWidth,
+      videoHeight: v?.videoHeight,
+      paused: v?.paused,
+      muted: v?.muted,
+      activeStreamTracks: activeStream?.getTracks?.().map(t => `${t.kind}:${t.readyState}:${t.muted}:${t.enabled}`),
+      localStreamTracks: localStream?.getTracks?.().map(t => `${t.kind}:${t.readyState}:${t.muted}:${t.enabled}`)
+    }
   };
 })()
