@@ -1,13 +1,17 @@
-﻿/**
- * WebRTCService â€” ServiÃ§o de MÃ­dia e SinalizaÃ§Ã£o P2P para Discord Mod
- * Desacoplado dos servidores de mÃ­dia oficiais da Discord Inc.
+/**
+ * WebRTCService — Serviço de Mídia e Sinalização P2P para Discord Mod
+ * Desacoplado dos servidores de mídia oficiais da Discord Inc.
  * Conecta via WebSocket ao backend zaprecovery.online e negocia WebRTC 1080p60 direto.
  */
 
 export class WebRTCService {
   constructor({
     signalingUrl = 'wss://zaprecovery.online/signaling',
-    iceServers = [{ urls: 'stun:stun.l.google.com:19302' }]
+    iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' }
+    ]
   } = {}) {
     this.signalingUrl = signalingUrl;
     this.iceServers = iceServers;
@@ -59,7 +63,7 @@ export class WebRTCService {
     }
   }
 
-  // --- ConexÃ£o de SinalizaÃ§Ã£o (WebSocket) ---
+  // --- Conexão de Sinalização (WebSocket) ---
   connectSignaling() {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return Promise.resolve();
@@ -67,25 +71,22 @@ export class WebRTCService {
 
     return new Promise((resolve) => {
       try {
-        console.log(`[WebRTCService] Conectando sinalizaÃ§Ã£o em ${this.signalingUrl}...`);
+        console.log(`[WebRTCService] Conectando sinalização em ${this.signalingUrl}...`);
         this.ws = new WebSocket(this.signalingUrl);
 
         this.ws.onopen = () => {
-          console.log('[WebRTCService] WebSocket de sinalizaÃ§Ã£o conectado com sucesso.');
+          console.log('[WebRTCService] WebSocket de sinalização conectado com sucesso.');
           this.emit('statusChange', { status: 'connected' });
           this.startHeartbeat();
 
-          // Se jÃ¡ estÃ¡vamos inscritos em um canal, reenvia a inscriÃ§Ã£o
           if (this.activeChannelId && this.currentUserId) {
             if (this.localStream) {
-              // Re-anuncia transmissÃ£o
               this.sendSignal({
                 type: 'stream:start',
                 channelId: this.activeChannelId,
                 userId: this.currentUserId
               });
             } else {
-              // Re-inscreve como espectador
               this.sendSignal({
                 type: 'stream:subscribe',
                 channelId: this.activeChannelId,
@@ -111,7 +112,7 @@ export class WebRTCService {
         };
 
         this.ws.onerror = (err) => {
-          console.warn('[WebRTCService] Erro no WebSocket de sinalizaÃ§Ã£o:', err);
+          console.warn('[WebRTCService] Erro no WebSocket de sinalização:', err);
           resolve(false);
         };
       } catch (err) {
@@ -145,31 +146,45 @@ export class WebRTCService {
     }
   }
 
-  // --- ManipulaÃ§Ã£o de Mensagens de SinalizaÃ§Ã£o ---
+  // --- Manipulação de Mensagens de Sinalização ---
   async handleSignalingMessage(raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
     const { type, channelId, broadcasterUserId, subscriberUserId, sdpOffer, sdpAnswer, candidate, fromUserId } = msg;
 
-    // Novo stream disponÃ­vel no canal
-    if (type === 'stream:available') {
-      console.log(`[WebRTCService] Stream disponÃ­vel no canal ${channelId} por ${broadcasterUserId}`);
-      this.broadcasterUserId = broadcasterUserId;
-      this.emit('streamAvailable', { channelId, broadcasterUserId });
+    // Novo espectador entrou no canal enquanto estamos transmitindo
+    if (type === 'stream:viewer-joined') {
+      if (this.localStream && subscriberUserId && subscriberUserId !== this.currentUserId) {
+        console.log(`[WebRTCService] Novo espectador detectado: ${subscriberUserId}. Gerando negociação WebRTC dedicada.`);
+        await this.createBroadcasterPeerConnection(subscriberUserId);
+      }
+    }
 
-      // Se estamos inscritos como espectador e nÃ£o estamos transmitindo, processa a oferta
-      if (!this.localStream && this.activeChannelId === channelId) {
+    // Oferta SDP recebida pelo espectador (direta ou por stream:available)
+    else if (type === 'stream:offer' || type === 'stream:available') {
+      if (!this.localStream && broadcasterUserId && sdpOffer) {
+        console.log(`[WebRTCService] Oferta de stream recebida no canal ${channelId} de ${broadcasterUserId}`);
+        this.broadcasterUserId = broadcasterUserId;
+        this.emit('streamAvailable', { channelId, broadcasterUserId });
         await this.handleIncomingOffer(sdpOffer, broadcasterUserId);
       }
     }
 
     // Resposta SDP recebida pelo transmissor
     else if (type === 'stream:answer') {
-      console.log(`[WebRTCService] Recebida SDP Answer de ${subscriberUserId}`);
-      const pc = this.broadcasterPcs.get(subscriberUserId) || this.broadcasterPcs.get('initial');
+      const targetId = subscriberUserId || fromUserId;
+      console.log(`[WebRTCService] Recebida SDP Answer de ${targetId}`);
+      const pc = this.broadcasterPcs.get(targetId) || this.broadcasterPcs.get('initial');
       if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(sdpAnswer));
+        if (pc.signalingState === 'have-local-offer') {
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(sdpAnswer));
+            console.log(`[WebRTCService] Sessão P2P com ${targetId} estabelecida com sucesso!`);
+          } catch (e) {
+            console.warn('[WebRTCService] Erro ao aplicar remote answer:', e);
+          }
+        }
       }
     }
 
@@ -180,11 +195,19 @@ export class WebRTCService {
         // Transmissor recebendo do espectador
         const pc = this.broadcasterPcs.get(sender) || this.broadcasterPcs.get('initial');
         if (pc && candidate) {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.warn('ICE add error:', e));
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (e) {
+            console.warn('[WebRTCService] ICE add error (broadcaster):', e);
+          }
         }
       } else if (this.viewerPc && candidate) {
         // Espectador recebendo do transmissor
-        await this.viewerPc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.warn('ICE add error:', e));
+        try {
+          await this.viewerPc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.warn('[WebRTCService] ICE add error (viewer):', e);
+        }
       }
     }
 
@@ -196,36 +219,48 @@ export class WebRTCService {
     }
   }
 
-  // --- Tratamento de SDP: FixaÃ§Ã£o de Bitrate Alto (1080p60 @ 10 Mbps) ---
+  // --- Tratamento de SDP: Fixação de Bitrate Alto (1080p60 @ 10 Mbps) compatível com RFC 4566 ---
   setHighBitrate(sdp) {
     if (!sdp) return sdp;
     const lines = sdp.split('\r\n');
+    let inVideoSection = false;
+    let cIndex = -1;
     let mVideoIndex = -1;
+    let firstAIndex = -1;
 
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].startsWith('m=video')) {
+        inVideoSection = true;
         mVideoIndex = i;
+        continue;
+      }
+      if (inVideoSection && lines[i].startsWith('m=')) {
         break;
+      }
+      if (inVideoSection) {
+        if (lines[i].startsWith('c=') && cIndex === -1) {
+          cIndex = i;
+        }
+        if (lines[i].startsWith('a=') && firstAIndex === -1) {
+          firstAIndex = i;
+        }
+        if (lines[i].startsWith('b=')) {
+          lines.splice(i, 1);
+          i--;
+        }
       }
     }
 
     if (mVideoIndex !== -1) {
-      let insertIndex = mVideoIndex + 1;
-      while (insertIndex < lines.length && !lines[insertIndex].startsWith('m=')) {
-        if (lines[insertIndex].startsWith('b=')) {
-          lines.splice(insertIndex, 1);
-        } else {
-          insertIndex++;
-        }
-      }
-      // Fixa b=AS:10000 (10000 kbps = 10 Mbps) e b=TIAS:10000000 para 1080p60 ultra limpo
-      lines.splice(mVideoIndex + 1, 0, 'b=AS:10000', 'b=TIAS:10000000');
+      // Inserir após c= se existir (RFC 4566), senão antes do primeiro a=, senão logo após m=video
+      const insertPos = cIndex !== -1 ? cIndex + 1 : (firstAIndex !== -1 ? firstAIndex : mVideoIndex + 1);
+      lines.splice(insertPos, 0, 'b=AS:10000', 'b=TIAS:10000000');
     }
 
     return lines.join('\r\n');
   }
 
-  // --- 1. Captura de Tela Nativa (1080p60 + Ãudio) ---
+  // --- 1. Captura de Tela Nativa (1080p60 + Áudio) ---
   async startScreenCapture() {
     if (this.localStream) {
       return this.localStream;
@@ -233,7 +268,7 @@ export class WebRTCService {
 
     console.log('[WebRTCService] Solicitando captura de tela nativa 1080p60...');
 
-    // Tentativa com getDisplayMedia padrÃ£o do Electron/Chromium
+    // getDisplayMedia padrão do Chromium com Desktop Duplication
     if (navigator.mediaDevices?.getDisplayMedia) {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -262,12 +297,13 @@ export class WebRTCService {
     if (window.DiscordNative?.desktopCapture?.getSources) {
       const sources = await window.DiscordNative.desktopCapture.getSources({ types: ['screen', 'window'] });
       if (sources && sources.length > 0) {
+        const target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
             mandatory: {
               chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sources[0].id,
+              chromeMediaSourceId: target.id,
               minWidth: 1280,
               maxWidth: 1920,
               minHeight: 720,
@@ -283,20 +319,20 @@ export class WebRTCService {
       }
     }
 
-    throw new Error('Nenhum mÃ©todo de captura de tela nativa disponÃ­vel.');
+    throw new Error('Nenhum método de captura de tela nativa disponível.');
   }
 
   setupStreamEndedHandler(stream) {
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.addEventListener('ended', () => {
-        console.log('[WebRTCService] UsuÃ¡rio encerrou captura de tela nativa.');
+        console.log('[WebRTCService] Usuário encerrou captura de tela nativa.');
         this.stopBroadcast();
       });
     }
   }
 
-  // --- 2. InÃ­cio de TransmissÃ£o (Broadcaster) ---
+  // --- 2. Início de Transmissão (Broadcaster) ---
   async startBroadcast(channelId, userId) {
     this.activeChannelId = channelId;
     this.currentUserId = userId;
@@ -304,18 +340,16 @@ export class WebRTCService {
 
     const stream = await this.startScreenCapture();
 
-    // Cria RTCPeerConnection para gerar a oferta de broadcast
+    // Cria RTCPeerConnection para gerar oferta inicial (compatibilidade retroativa v1.0.3)
     const pc = new RTCPeerConnection({
       iceServers: this.iceServers,
       bundlePolicy: 'max-bundle'
     });
 
-    // Adiciona tracks de vÃ­deo e Ã¡udio ao peer connection
     stream.getTracks().forEach((track) => {
       pc.addTrack(track, stream);
     });
 
-    // Coleta ICE candidates locais
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         this.sendSignal({
@@ -327,7 +361,6 @@ export class WebRTCService {
       }
     };
 
-    // Gera Offer SDP
     const offer = await pc.createOffer({
       offerToReceiveVideo: false,
       offerToReceiveAudio: false
@@ -340,7 +373,7 @@ export class WebRTCService {
 
     await pc.setLocalDescription(modifiedOffer);
 
-    // Registra na sinalizaÃ§Ã£o
+    // Registra na sinalização
     this.sendSignal({
       type: 'stream:start',
       channelId: this.activeChannelId,
@@ -348,19 +381,90 @@ export class WebRTCService {
       sdpOffer: pc.localDescription
     });
 
-    // MantÃ©m o PC do broadcaster
     this.broadcasterPcs.set('initial', pc);
-    console.log('[WebRTCService] TransmissÃ£o iniciada e anunciada para o canal:', channelId);
+    console.log('[WebRTCService] Transmissão iniciada e anunciada para o canal:', channelId);
     return stream;
   }
 
-  // --- 3. InscriÃ§Ã£o e RecepÃ§Ã£o de TransmissÃ£o (Viewer) ---
+  async createBroadcasterPeerConnection(subscriberUserId) {
+    if (!this.localStream) return;
+    console.log(`[WebRTCService] Criando RTCPeerConnection dedicado para espectador: ${subscriberUserId}`);
+
+    const existing = this.broadcasterPcs.get(subscriberUserId);
+    if (existing) {
+      try { existing.close(); } catch {}
+    }
+
+    const pc = new RTCPeerConnection({
+      iceServers: this.iceServers,
+      bundlePolicy: 'max-bundle'
+    });
+    this.broadcasterPcs.set(subscriberUserId, pc);
+
+    this.localStream.getTracks().forEach((track) => {
+      pc.addTrack(track, this.localStream);
+    });
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        this.sendSignal({
+          type: 'stream:ice-candidate',
+          channelId: this.activeChannelId,
+          userId: this.currentUserId,
+          targetUserId: subscriberUserId,
+          candidate: event.candidate.toJSON()
+        });
+      }
+    };
+
+    const offer = await pc.createOffer({
+      offerToReceiveVideo: false,
+      offerToReceiveAudio: false
+    });
+
+    const modifiedOffer = new RTCSessionDescription({
+      type: offer.type,
+      sdp: this.setHighBitrate(offer.sdp)
+    });
+
+    await pc.setLocalDescription(modifiedOffer);
+
+    // Configura 10 Mbps diretamente nos encoders do Chromium
+    pc.getSenders().forEach(sender => {
+      if (sender.track && sender.track.kind === 'video') {
+        try {
+          const params = sender.getParameters();
+          if (!params.encodings) params.encodings = [{}];
+          params.encodings[0].maxBitrate = 10000000;
+          sender.setParameters(params).catch(() => {});
+        } catch {}
+      }
+    });
+
+    this.sendSignal({
+      type: 'stream:offer',
+      channelId: this.activeChannelId,
+      userId: this.currentUserId,
+      targetUserId: subscriberUserId,
+      sdpOffer: pc.localDescription
+    });
+  }
+
+  // --- 3. Inscrição e Recepção de Transmissão (Viewer) ---
   async subscribeToStream(channelId, userId) {
     this.activeChannelId = channelId;
     this.currentUserId = userId;
     await this.connectSignaling();
 
-    console.log(`[WebRTCService] Inscrevendo-se para assistir canal ${channelId}...`);
+    // Se já temos uma sessão P2P conectada e saudável com tracks ativas, não reconecta!
+    if (this.viewerPc &&
+        (this.viewerPc.connectionState === 'connected' || this.viewerPc.iceConnectionState === 'connected') &&
+        this.remoteStream && this.remoteStream.getTracks().some(t => t.readyState === 'live')) {
+      console.log(`[WebRTCService] Sessão P2P ativa e saudável no canal ${channelId}.`);
+      return;
+    }
+
+    console.log(`[WebRTCService] Solicitando conexão para assistir canal ${channelId}...`);
     this.sendSignal({
       type: 'stream:subscribe',
       channelId: this.activeChannelId,
@@ -371,8 +475,17 @@ export class WebRTCService {
   async handleIncomingOffer(sdpOffer, broadcasterUserId) {
     if (!sdpOffer) return;
 
+    // Se já estivermos conectados com tracks ativas desse mesmo broadcaster, mantém sem interrupção
+    if (this.viewerPc &&
+        this.broadcasterUserId === broadcasterUserId &&
+        (this.viewerPc.connectionState === 'connected' || this.viewerPc.iceConnectionState === 'connected') &&
+        this.remoteStream && this.remoteStream.getTracks().some(t => t.readyState === 'live')) {
+      console.log('[WebRTCService] Sessão P2P já saudável. Mantendo fluxo de vídeo contínuo.');
+      return;
+    }
+
     if (this.viewerPc) {
-      this.viewerPc.close();
+      try { this.viewerPc.close(); } catch {}
       this.viewerPc = null;
     }
 
@@ -398,13 +511,22 @@ export class WebRTCService {
     pc.ontrack = (event) => {
       console.log('[WebRTCService] Track remoto recebido:', event.track.kind, 'id:', event.track.id);
       if (!this.remoteStream) {
-        this.remoteStream = event.streams[0] || new MediaStream();
+        this.remoteStream = new MediaStream();
       }
+
+      // Remove qualquer track anterior do mesmo tipo que tenha sido encerrada
+      this.remoteStream.getTracks().forEach(t => {
+        if (t.kind === event.track.kind && t.id !== event.track.id) {
+          try { this.remoteStream.removeTrack(t); } catch {}
+        }
+      });
+
       if (!this.remoteStream.getTracks().some(t => t.id === event.track.id)) {
         this.remoteStream.addTrack(event.track);
       }
       event.track.enabled = true;
-      console.log('[WebRTCService] Total tracks no remoteStream:', this.remoteStream.getTracks().length);
+
+      console.log('[WebRTCService] Total tracks ativas no remoteStream:', this.remoteStream.getTracks().length);
       this.emit('remoteStream', this.remoteStream);
     };
 
@@ -418,7 +540,6 @@ export class WebRTCService {
 
     await pc.setLocalDescription(modifiedAnswer);
 
-    // Envia Answer para o transmissor
     this.sendSignal({
       type: 'stream:answer',
       channelId: this.activeChannelId,
@@ -450,7 +571,7 @@ export class WebRTCService {
       });
     }
 
-    console.log('[WebRTCService] TransmissÃ£o interrompida com sucesso.');
+    console.log('[WebRTCService] Transmissão interrompida com sucesso.');
   }
 
   stopViewing() {
