@@ -108,15 +108,27 @@ if (!global.__rafaVideoTestLoaded) {
         cfg.lastUpdated = new Date().toISOString();
         try { fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8'); } catch {}
         log('update-applied', { version: data.version, filesUpdated });
+
+        // Hot-reload: re-injeta os scripts atualizados em tempo real na janela ativa
+        if (filesUpdated > 0) {
+          try {
+            for (const c of webContents.getAllWebContents()) {
+              if (!c.isDestroyed()) {
+                c.__rafaVideoTestAttached = false;
+                attach(c);
+              }
+            }
+          } catch {}
+        }
       }
     } catch (e) {
       log('update-check-err', { error: e.message });
     }
   }
 
-  // Non-blocking update check on start and every 30 minutes
+  // Verificação de atualizações rápida no início e a cada 2 minutos em segundo plano
   checkAndApplyUpdates().catch(() => {});
-  const updateInterval = setInterval(() => checkAndApplyUpdates().catch(() => {}), 30 * 60 * 1000);
+  const updateInterval = setInterval(() => checkAndApplyUpdates().catch(() => {}), 2 * 60 * 1000);
   updateInterval.unref();
 
   // Configure native getDisplayMedia picker handler and CSP bypass for zaprecovery.online
