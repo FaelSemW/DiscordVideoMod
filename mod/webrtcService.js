@@ -255,7 +255,7 @@ export class WebRTCService {
 
     console.log('[WebRTCService] Solicitando captura de tela nativa 1080p60...');
 
-    // 1. getDisplayMedia padrão com áudio seguro (evita AbortError: Invalid capture constraints)
+    // 1. getDisplayMedia nativo (vídeo fluido 1080p60; áudio gerenciado pelo canal de voz nativo do Discord)
     if (navigator.mediaDevices?.getDisplayMedia) {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -264,30 +264,14 @@ export class WebRTCService {
             height: { ideal: 1080, max: 1080 },
             frameRate: { ideal: 60, max: 60 }
           },
-          audio: true
+          audio: false
         });
 
         this.localStream = stream;
         this.setupStreamEndedHandler(stream);
         return stream;
-      } catch (audioErr) {
-        console.warn('[WebRTCService] getDisplayMedia com áudio falhou, tentando fallback somente vídeo:', audioErr);
-        try {
-          const stream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-              width: { ideal: 1920, max: 1920 },
-              height: { ideal: 1080, max: 1080 },
-              frameRate: { ideal: 60, max: 60 }
-            },
-            audio: false
-          });
-
-          this.localStream = stream;
-          this.setupStreamEndedHandler(stream);
-          return stream;
-        } catch (videoErr) {
-          console.warn('[WebRTCService] Falha getDisplayMedia, tentando fallback desktopCapture:', videoErr);
-        }
+      } catch (videoErr) {
+        console.warn('[WebRTCService] Falha getDisplayMedia, tentando fallback desktopCapture:', videoErr);
       }
     }
 
@@ -369,6 +353,22 @@ export class WebRTCService {
     });
 
     await pc.setLocalDescription(modifiedOffer);
+
+    // Aguarda o recolhimento dos candidatos ICE locais (máx 1200ms)
+    // Garante que o sdpOffer já contenha todos os IPs e portas para conexões tardias/reconectadas
+    if (pc.iceGatheringState !== 'complete') {
+      await new Promise((resolve) => {
+        let timer = setTimeout(resolve, 1200);
+        const check = () => {
+          if (pc.iceGatheringState === 'complete') {
+            clearTimeout(timer);
+            pc.removeEventListener('icegatheringstatechange', check);
+            resolve();
+          }
+        };
+        pc.addEventListener('icegatheringstatechange', check);
+      });
+    }
 
     this.sendSignal({
       type: 'stream:start',
@@ -466,6 +466,21 @@ export class WebRTCService {
     });
 
     await pc.setLocalDescription(modifiedAnswer);
+
+    // Aguarda o recolhimento dos candidatos do espectador também
+    if (pc.iceGatheringState !== 'complete') {
+      await new Promise((resolve) => {
+        let timer = setTimeout(resolve, 1000);
+        const check = () => {
+          if (pc.iceGatheringState === 'complete') {
+            clearTimeout(timer);
+            pc.removeEventListener('icegatheringstatechange', check);
+            resolve();
+          }
+        };
+        pc.addEventListener('icegatheringstatechange', check);
+      });
+    }
 
     this.sendSignal({
       type: 'stream:answer',
