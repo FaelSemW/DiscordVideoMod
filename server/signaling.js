@@ -14,6 +14,16 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   if (req.url === '/health' || req.url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', time: new Date().toISOString() }));
@@ -57,6 +67,104 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ error: err.message }));
       return;
     }
+  }
+
+  if (req.url && req.url.startsWith('/api/mod/mobile/update')) {
+    try {
+      const candidates = [
+        path.join(__dirname, 'mobile', 'mobile-bundle.js'),
+        path.join(__dirname, '..', '..', 'mobile', 'dist', 'mobile-bundle.js'),
+        'D:\\discord\\mobile\\dist\\mobile-bundle.js',
+        path.join(__dirname, '..', 'mobile', 'dist', 'mobile-bundle.js')
+      ];
+      const bundlePath = candidates.find(f => fs.existsSync(f));
+      let code = '';
+      if (bundlePath) {
+        code = fs.readFileSync(bundlePath, 'utf8');
+      }
+
+      let version = '1.1.0-mobile';
+      const configCandidates = [
+        path.join(__dirname, 'mobile', 'config.json'),
+        path.join(__dirname, '..', '..', 'mobile', 'config.json'),
+        'D:\\discord\\mobile\\config.json',
+        path.join(__dirname, '..', 'mobile', 'config.json')
+      ];
+      const configPath = configCandidates.find(f => fs.existsSync(f));
+      if (configPath) {
+        try {
+          const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          if (cfg.version) version = cfg.version;
+        } catch {}
+      }
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(JSON.stringify({
+        version,
+        updatedAt: new Date().toISOString(),
+        code
+      }));
+      return;
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+      return;
+    }
+  }
+
+  if (req.url && req.url.startsWith('/plugin')) {
+    try {
+      const parsedUrl = new URL(req.url, 'http://localhost');
+      let filename = 'manifest.json';
+      if (parsedUrl.pathname.endsWith('index.js')) filename = 'index.js';
+      else if (parsedUrl.pathname.endsWith('manifest.json')) filename = 'manifest.json';
+
+      const candidates = [
+        path.join(__dirname, 'plugin', filename),
+        path.join(__dirname, '..', '..', 'mobile', 'plugin', filename),
+        path.join('D:\\discord\\mobile\\plugin', filename)
+      ];
+      const filePath = candidates.find(f => fs.existsSync(f));
+      if (filePath) {
+        const contentType = filename.endsWith('.js') ? 'application/javascript; charset=utf-8' : 'application/json; charset=utf-8';
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Access-Control-Allow-Origin': '*'
+        });
+        res.end(fs.readFileSync(filePath));
+        return;
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Plugin file not found');
+        return;
+      }
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+      return;
+    }
+  }
+
+  if (req.url && (req.url === '/download/apk' || req.url === '/api/apk')) {
+    try {
+      const candidates = [
+        path.join(__dirname, 'dist', 'revenge-manager-1.3.2.apk'),
+        'D:\\discord\\mobile\\dist\\revenge-manager-1.3.2.apk'
+      ];
+      const apkPath = candidates.find(f => fs.existsSync(f));
+      if (apkPath) {
+        res.writeHead(200, {
+          'Content-Type': 'application/vnd.android.package-archive',
+          'Content-Disposition': 'attachment; filename="revenge-manager-1.3.2.apk"'
+        });
+        fs.createReadStream(apkPath).pipe(res);
+        return;
+      }
+    } catch (e) {}
   }
 
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });

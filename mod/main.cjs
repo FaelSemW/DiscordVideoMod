@@ -119,8 +119,6 @@ if (!global.__rafaVideoTestLoaded) {
   const updateInterval = setInterval(() => checkAndApplyUpdates().catch(() => {}), 2 * 60 * 1000);
   updateInterval.unref();
 
-  let currentSelectedSourceId = null;
-
   // Configurações do Electron: CSP permissivo para nuvem e captura de tela robusta
   if (app && typeof app.whenReady === 'function') {
     app.whenReady().then(() => {
@@ -144,13 +142,7 @@ if (!global.__rafaVideoTestLoaded) {
           ses.setDisplayMediaRequestHandler((request, callback) => {
             desktopCapturer.getSources({ types: ['screen', 'window'] }).then((sources) => {
               if (sources && sources.length > 0) {
-                let target;
-                if (currentSelectedSourceId) {
-                  target = sources.find(s => s.id === currentSelectedSourceId || s.id.includes(currentSelectedSourceId));
-                }
-                if (!target) {
-                  target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
-                }
+                const target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
                 log('capturing-source', { id: target.id, name: target.name });
                 callback({ video: target, audio: 'loopback' });
               } else {
@@ -214,19 +206,14 @@ if (!global.__rafaVideoTestLoaded) {
             cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
           } catch {}
 
-          const isPopout = Boolean(url.pathname && url.pathname.includes('/popout'));
           const candidate = await frame.executeJavaScript(
-            `window.__DISCORD_MOD_VERSION__ = ${JSON.stringify(cfg.version || '1.1.1')};\n` +
+            `window.__DISCORD_MOD_VERSION__ = ${JSON.stringify(cfg.version || '1.0.0-stable')};\n` +
             `window.__ZAP_CONFIG__ = ${JSON.stringify(cfg)};\n` +
-            `window.__DISCORD_IS_POPOUT__ = ${JSON.stringify(isPopout)};\n` +
             webrtcServiceJs + '\n' +
             fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8')
               .replace('__RAFA_ENABLED__', JSON.stringify(enabled))
           );
-          if (candidate) {
-            result = candidate;
-            if (candidate.selectedSourceId) currentSelectedSourceId = candidate.selectedSourceId;
-          }
+          if (candidate) result = candidate;
           if (candidate?.verified) break;
         }
 

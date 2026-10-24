@@ -1,0 +1,16 @@
+{
+  "name": "discord-video-mod-mobile",
+  "version": "1.1.0-mobile",
+  "description": "Discord Video Mod para iOS (iPhone) e Android com suporte a Auto-Update OTA e base estável 1.1.0",
+  "enabled": true,
+  "serverUrl": "https://discordvideomod.onrender.com",
+  "signalingUrl": "wss://discordvideomod.onrender.com/signaling",
+  "updateUrl": "https://discordvideomod.onrender.com/api/mod/mobile/update",
+  "checkUpdateIntervalMs": 300000,
+  "defaultQuality": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 60,
+    "maxBitrate": 10000
+  }
+}
