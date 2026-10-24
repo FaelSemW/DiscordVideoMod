@@ -9,6 +9,7 @@
   ],
   "main": "index.js",
   "version": "1.1.0-mobile",
+  "hash": "v110-109fc38c7a682aba4de7090324b14f788122a0ae7d7f323c48dd4114db238ce4",
   "vendetta": {
     "icon": "ic_video"
   }
