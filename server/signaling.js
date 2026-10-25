@@ -250,22 +250,12 @@ wss.on('connection', (ws) => {
 
       const active = activeOffers.get(channelId);
       if (active && active.broadcasterUserId !== userId) {
-        const peers = signalingChannels.get(channelId);
-        const broadcasterWs = peers?.get(active.broadcasterUserId);
-        if (broadcasterWs && broadcasterWs.readyState === 1) {
-          broadcasterWs.send(JSON.stringify({
-            type: 'stream:viewer-request',
-            channelId,
-            subscriberUserId: userId
-          }));
-        } else {
-          ws.send(JSON.stringify({
-            type: 'stream:available',
-            channelId,
-            broadcasterUserId: active.broadcasterUserId,
-            sdpOffer: active.sdpOffer
-          }));
-        }
+        ws.send(JSON.stringify({
+          type: 'stream:available',
+          channelId,
+          broadcasterUserId: active.broadcasterUserId,
+          sdpOffer: active.sdpOffer
+        }));
       }
     } else if (type === 'stream:offer') {
       const peers = signalingChannels.get(channelId);

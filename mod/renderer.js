@@ -73,15 +73,16 @@
     catch { return false; }
   });
 
+  const selectedChannelStore = candidates.find(x => {
+    try { return x && typeof x.getVoiceChannelId === 'function' && (x.getName?.() === 'SelectedChannelStore' || typeof x.getChannelId === 'function'); }
+    catch { return false; }
+  });
+
   function getActiveVoiceChannelId() {
-    for (const c of candidates) {
-      try {
-        if (c && typeof c.getVoiceChannelId === 'function') {
-          const id = c.getVoiceChannelId();
-          if (typeof id === 'string' && /^\d+$/.test(id)) return id;
-        }
-      } catch {}
-    }
+    try {
+      const id = selectedChannelStore?.getVoiceChannelId?.();
+      if (typeof id === 'string' && /^\d+$/.test(id)) return id;
+    } catch {}
     return null;
   }
 

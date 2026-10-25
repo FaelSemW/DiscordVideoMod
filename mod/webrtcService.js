@@ -159,7 +159,8 @@ export class WebRTCService {
       this.broadcasterUserId = broadcasterUserId;
       this.emit('streamAvailable', { channelId, broadcasterUserId });
 
-      if (!this.localStream && this.activeChannelId === channelId) {
+      if (!this.localStream) {
+        if (!this.activeChannelId) this.activeChannelId = channelId;
         await this.handleIncomingOffer(sdpOffer, broadcasterUserId);
       }
     }
