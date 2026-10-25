@@ -30,6 +30,14 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.url === '/download' || req.url === '/download/injector') {
+    res.writeHead(302, {
+      'Location': 'https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.3/DiscordModInjector.exe'
+    });
+    res.end();
+    return;
+  }
+
   if (req.url === '/api/mod/update') {
     try {
       const candidates = [
