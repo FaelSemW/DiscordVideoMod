@@ -1,16 +1,12 @@
 /**
  * Discord Video Mod Mobile - OTA Bundle v1.1.0-mobile
- * Gerado em: 2026-10-24T22:59:25.739Z
+ * Gerado em: 2026-10-25T00:16:15.397Z
  */
 (function(global, window, config) {
   'use strict';
-  const module = { exports: {} };
-  const exports = module.exports;
 
   // --- 1. Signaling ---
-  'use strict';
-
-/**
+  /**
  * Mobile WebRTC Signaling Client
  * Gerencia a comunicação WebSocket com o servidor de sinalização (Render Cloud)
  * Compatível com iOS (JavaScriptCore/Hermes) e Android (Hermes/V8).
@@ -206,12 +202,8 @@ class MobileSignalingClient {
   }
 }
 
-if (typeof module !== 'undefined' && 
-
   // --- 2. WebRTC ---
-  'use strict';
-
-/**
+  /**
  * Mobile WebRTC Adapter
  * Gerencia sessões WebRTC no ambiente mobile (React Native / iOS / Android)
  * Herda a base de áudio funcional e conexão P2P da versão 1.1.0 estável.
@@ -358,12 +350,8 @@ class MobileWebRTCAdapter {
   }
 }
 
-if (typeof module !== 'undefined' && 
-
   // --- 3. Hook ---
-  'use strict';
-
-/**
+  /**
  * Mobile Native Dispatcher & Store Hook
  * Conecta o mod aos módulos internos do Discord Mobile (React Native Hermes/JSC).
  * Suporta Revenge, Bunny, Vendetta, Enmity ou injeção direta de bundle.
@@ -470,19 +458,13 @@ class MobileNativeDispatcherHook {
   }
 }
 
-if (typeof module !== 'undefined' && 
-
   // --- 4. Core ---
-  'use strict';
-
-/**
+  /**
  * Mobile Core Manager
  * Orquestrador central do Discord Video Mod Mobile (iOS/Android)
  * Mantém a resiliência e auto-inscrição da 1.1.0 estável.
  */
 
-const { MobileSignalingClient } = require('./mobileSignaling');
-const { MobileWebRTCAdapter } = require('./mobileWebRTC');
 
 class MobileCoreManager {
   constructor(options = {}) {
@@ -634,8 +616,6 @@ class MobileCoreManager {
   }
 }
 
-if (typeof module !== 'undefined' && 
-
   // --- 5. Initializer ---
   try {
     const hook = new MobileNativeDispatcherHook();
@@ -657,7 +637,7 @@ if (typeof module !== 'undefined' &&
 
     manager.start().then(() => {
       console.log('[DiscordMod Mobile OTA] Iniciado com sucesso v' + (config.version || '1.1.0-mobile'));
-    }).catch(e => console.warn('[DiscordMod Mobile OTA] Erro ao iniciar:', e));
+    }).catch(function(e) { console.warn('[DiscordMod Mobile OTA] Erro ao iniciar:', e); });
   } catch (err) {
     console.error('[DiscordMod Mobile OTA] Falha fatal no bootstrap:', err);
   }

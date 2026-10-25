@@ -69,6 +69,34 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  if (req.url && req.url.startsWith('/api/mod/mobile/release/bundle-ota/revenge.min.js')) {
+    try {
+      const candidates = [
+        path.join(__dirname, 'mobile', 'revenge.min.js'),
+        path.join(__dirname, '..', '..', 'mobile', 'android', 'tools', 'custom-revenge.min.js'),
+        'D:\\discord\\mobile\\android\\tools\\custom-revenge.min.js'
+      ];
+      const filePath = candidates.find(f => fs.existsSync(f));
+      if (filePath) {
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Access-Control-Allow-Origin': '*'
+        });
+        fs.createReadStream(filePath).pipe(res);
+        return;
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Mobile revenge bundle not found');
+        return;
+      }
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+      return;
+    }
+  }
+
   if (req.url && req.url.startsWith('/api/mod/mobile/update')) {
     try {
       const candidates = [
