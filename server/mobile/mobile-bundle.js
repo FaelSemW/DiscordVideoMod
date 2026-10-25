@@ -1,6 +1,6 @@
 /**
  * Discord Video Mod Mobile - OTA Bundle v1.1.0-mobile
- * Gerado em: 2026-10-25T02:29:46.342Z
+ * Gerado em: 2026-10-25T03:02:13.753Z
  */
 (function(global, window, config) {
   'use strict';
@@ -362,11 +362,12 @@ class MobileNativeDispatcherHook {
     this.root = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : global);
     this.dispatcher = null;
     this.stores = {};
+    this.isHooked = false;
   }
 
   findModules() {
     // 1. Tenta via loaders conhecidos de React Native Mods (Revenge / Bunny / Vendetta)
-    const v = this.root.vendetta || this.root.bunny || this.root.enmity;
+    const v = this.root.vendetta || this.root.bunny || this.root.revenge || this.root.enmity;
     if (v?.metro) {
       const dispatcher = v.metro.common?.FluxDispatcher ||
         (v.metro.findByProps && v.metro.findByProps('_interceptors')) ||
@@ -383,11 +384,27 @@ class MobileNativeDispatcherHook {
         (v.metro.findByStoreName && v.metro.findByStoreName('ExperimentStore')) ||
         (v.metro.findByProps && v.metro.findByProps('getClientOverrides'));
 
+      let videoGuardExp = null;
+      try {
+        if (typeof v.metro.findByFilePath === 'function') {
+          videoGuardExp = v.metro.findByFilePath('modules/media_engine/VideoGuardExperiment.tsx');
+        }
+        if (!videoGuardExp && typeof v.metro.find === 'function') {
+          videoGuardExp = v.metro.find(m => {
+            if (!m) return false;
+            if (m.definition?.id === '2026-08-video-guard') return true;
+            if (m.VideoGuardExperiment?.definition?.id === '2026-08-video-guard') return true;
+            return Object.values(m).some(val => val?.id === '2026-08-video-guard' || val?.definition?.id === '2026-08-video-guard');
+          });
+        }
+      } catch (e) {}
+
       return {
         voiceStore,
         userStore,
         dispatcher,
-        experimentStore
+        experimentStore,
+        videoGuardExp
       };
     }
 
@@ -406,8 +423,9 @@ class MobileNativeDispatcherHook {
           const userStore = modules.find(m => typeof m?.getCurrentUser === 'function');
           const dispatcher = modules.find(m => typeof m?.dispatch === 'function' && typeof m?.subscribe === 'function');
           const experimentStore = modules.find(m => typeof m?.getClientOverrides === 'function');
+          const videoGuardExp = modules.find(m => m?.definition?.id === '2026-08-video-guard');
 
-          return { voiceStore, userStore, dispatcher, experimentStore };
+          return { voiceStore, userStore, dispatcher, experimentStore, videoGuardExp };
         }
       } catch (e) {}
     }
@@ -416,7 +434,8 @@ class MobileNativeDispatcherHook {
       voiceStore: null,
       userStore: null,
       dispatcher: null,
-      experimentStore: null
+      experimentStore: null,
+      videoGuardExp: null
     };
   }
 
@@ -426,6 +445,7 @@ class MobileNativeDispatcherHook {
       const userStore = modules.userStore || initialModules?.userStore;
       const experimentStore = modules.experimentStore || initialModules?.experimentStore;
       const dispatcher = modules.dispatcher || initialModules?.dispatcher;
+      const videoGuardExp = modules.videoGuardExp || initialModules?.videoGuardExp;
 
       // 1. Desbloqueia developer flags no usuário atual
       try {
@@ -440,7 +460,7 @@ class MobileNativeDispatcherHook {
         }
       } catch (e) {}
 
-      // 2. Hook direto no protótipo de ApexExperimentStore
+      // 2. Hook direto no protótipo de ApexExperimentStore e ExperimentStore
       if (experimentStore) {
         try {
           const proto = Object.getPrototypeOf(experimentStore) || experimentStore;
@@ -449,22 +469,67 @@ class MobileNativeDispatcherHook {
             const origOverrides = proto.getClientOverrides;
             proto.getClientOverrides = function() {
               const res = origOverrides.call(this) || {};
-              res['2026-08-video-guard'] = { variantId: -1 };
+              res['2026-08-video-guard'] = { type: 'user', variantId: -1 };
+              res['video-guard'] = { type: 'user', variantId: -1 };
               return res;
             };
+            console.log('[DiscordVideoMod] ApexExperimentStore.getClientOverrides patched!');
           }
           if (proto.getExperimentBucket && !proto.__zapBucketPatched) {
             proto.__zapBucketPatched = true;
             const origBucket = proto.getExperimentBucket;
             proto.getExperimentBucket = function(exp) {
-              if (exp === '2026-08-video-guard') return -1;
+              if (exp === '2026-08-video-guard' || exp === 'video-guard') return -1;
               return origBucket.call(this, exp);
             };
+            console.log('[DiscordVideoMod] ApexExperimentStore.getExperimentBucket patched!');
           }
-        } catch (e) {}
+          if (proto.getUserExperimentBucket && !proto.__zapUserBucketPatched) {
+            proto.__zapUserBucketPatched = true;
+            const origUserBucket = proto.getUserExperimentBucket;
+            proto.getUserExperimentBucket = function(exp) {
+              if (exp === '2026-08-video-guard' || exp === 'video-guard') return -1;
+              return origUserBucket.call(this, exp);
+            };
+          }
+          if (proto.getGuildExperimentBucket && !proto.__zapGuildBucketPatched) {
+            proto.__zapGuildBucketPatched = true;
+            const origGuildBucket = proto.getGuildExperimentBucket;
+            proto.getGuildExperimentBucket = function(exp) {
+              if (exp === '2026-08-video-guard' || exp === 'video-guard') return -1;
+              return origGuildBucket.call(this, exp);
+            };
+          }
+        } catch (e) {
+          console.error('[DiscordVideoMod] Erro ao aplicar hook em experimentStore:', e);
+        }
       }
 
-      // 3. Dispara a ação de override contínua no Dispatcher
+      // 3. Patch direto no módulo VideoGuardExperiment
+      if (videoGuardExp && !videoGuardExp.__zapExpPatched) {
+        try {
+          videoGuardExp.__zapExpPatched = true;
+          const safeConfig = { enabled: false, isBlocked: false, videoDisabled: false };
+          const targets = [videoGuardExp, videoGuardExp.VideoGuardExperiment, videoGuardExp.default].filter(Boolean);
+
+          for (const target of targets) {
+            if (typeof target.useExperiment === 'function') {
+              target.useExperiment = () => safeConfig;
+            }
+            if (typeof target.getCurrentConfig === 'function') {
+              target.getCurrentConfig = () => safeConfig;
+            }
+            if (target.definition) {
+              target.definition.defaultConfig = safeConfig;
+            }
+          }
+          console.log('[DiscordVideoMod] VideoGuardExperiment module patched to enabled: false!');
+        } catch (e) {
+          console.error('[DiscordVideoMod] Erro ao aplicar hook em videoGuardExp:', e);
+        }
+      }
+
+      // 4. Dispara a ação de override contínua no Dispatcher
       if (dispatcher && typeof dispatcher.dispatch === 'function') {
         try {
           dispatcher.dispatch({
@@ -480,19 +545,35 @@ class MobileNativeDispatcherHook {
     applyAll();
 
     // Se inscreve nos eventos do ciclo de vida do Discord
-    const modules = this.findModules();
-    const dispatcher = modules.dispatcher || initialModules?.dispatcher;
-    if (dispatcher && typeof dispatcher.subscribe === 'function') {
-      try { dispatcher.subscribe('CONNECTION_OPEN', applyAll); } catch (e) {}
-      try { dispatcher.subscribe('CURRENT_USER_UPDATE', applyAll); } catch (e) {}
-      try { dispatcher.subscribe('APEX_EXPERIMENTS_FETCH_SUCCESS', applyAll); } catch (e) {}
-      try { dispatcher.subscribe('VOICE_CHANNEL_SELECT', applyAll); } catch (e) {}
-      try { dispatcher.subscribe('MEDIA_ENGINE_SET_GO_LIVE', applyAll); } catch (e) {}
-      try { dispatcher.subscribe('RTC_CONNECTION_STATE', applyAll); } catch (e) {}
-    }
+    const registerDispatcherEvents = () => {
+      const modules = this.findModules();
+      const dispatcher = modules.dispatcher || initialModules?.dispatcher;
+      if (dispatcher && typeof dispatcher.subscribe === 'function' && !this.subscribed) {
+        this.subscribed = true;
+        try { dispatcher.subscribe('CONNECTION_OPEN', applyAll); } catch (e) {}
+        try { dispatcher.subscribe('CURRENT_USER_UPDATE', applyAll); } catch (e) {}
+        try { dispatcher.subscribe('APEX_EXPERIMENTS_FETCH_SUCCESS', applyAll); } catch (e) {}
+        try { dispatcher.subscribe('VOICE_CHANNEL_SELECT', applyAll); } catch (e) {}
+        try { dispatcher.subscribe('MEDIA_ENGINE_SET_GO_LIVE', applyAll); } catch (e) {}
+        try { dispatcher.subscribe('RTC_CONNECTION_STATE', applyAll); } catch (e) {}
+        console.log('[DiscordVideoMod] Dispatcher lifecycle listeners registrados!');
+      }
+    };
 
-    // Intervalo contínuo de segurança a cada 1.5s
-    setInterval(applyAll, 1500);
+    registerDispatcherEvents();
+
+    // Polling inicial para garantir inicialização caso stores carreguem assincronamente
+    let pollCount = 0;
+    const pollInterval = setInterval(() => {
+      pollCount++;
+      applyAll();
+      registerDispatcherEvents();
+      if (pollCount > 30) {
+        clearInterval(pollInterval);
+        // Intervalo de segurança permanente a cada 3s
+        setInterval(applyAll, 3000);
+      }
+    }, 500);
   }
 
   getVoiceChannelId() {
