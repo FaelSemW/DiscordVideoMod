@@ -34,12 +34,15 @@
     }
   }
 
-  // Pre-load relevant stores
-  const relevant = factories.filter(([, factory]) =>
-    /ApexExperimentStore|_orderedActionHandlers|getClientOverrides|UserStore|isDeveloper|SelectedChannelStore|getVoiceChannelId/.test(String(factory))
-  );
-  for (const [id] of relevant) {
-    try { req(id); } catch {}
+  // Pre-load relevant stores uma única vez
+  if (!window.__zapStoresPreloaded) {
+    window.__zapStoresPreloaded = true;
+    const relevant = factories.filter(([, factory]) =>
+      /ApexExperimentStore|_orderedActionHandlers|getClientOverrides|UserStore|isDeveloper|SelectedChannelStore/.test(String(factory))
+    );
+    for (const [id] of relevant) {
+      try { req(id); } catch {}
+    }
   }
 
   const candidates = [];
@@ -216,6 +219,16 @@
         getActiveVoiceChannelId();
       const currentUser = userStore?.getCurrentUser?.();
 
+      // Guarda a última fonte de captura selecionada (janela de aplicativo ou tela inteira)
+      if (event.type === 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE') {
+        const desc = event.settings?.desktopDescription || event.desktopDescription;
+        const sourceId = desc?.id || event.sourceId;
+        if (sourceId) {
+          window.__zapSelectedSourceId = sourceId;
+          console.log('[DiscordMod Dispatcher] Origem selecionada para Go Live:', sourceId);
+        }
+      }
+
       // Intercepta ação de iniciar transmissão nativa (Go Live)
       if (
         event.type === 'STREAM_START' ||
@@ -224,10 +237,15 @@
         const hasSource = event.type === 'STREAM_START' ||
           Boolean(event.desktopDescription?.id || event.sourceId || event.desktopDescription);
         const targetChannelId = event.channelId || voiceChannelId;
-        console.log('[DiscordMod Dispatcher] Go Live iniciado:', event.type, 'channelId:', targetChannelId);
+        const targetSourceId = event.desktopDescription?.id ||
+          event.sourceId ||
+          event.settings?.desktopDescription?.id ||
+          window.__zapSelectedSourceId;
+
+        console.log('[DiscordMod Dispatcher] Go Live iniciado:', event.type, 'channelId:', targetChannelId, 'sourceId:', targetSourceId);
         if (service && targetChannelId && currentUser) {
           if (hasSource) {
-            service.startBroadcast(targetChannelId, currentUser.id)
+            service.startBroadcast(targetChannelId, currentUser.id, targetSourceId)
               .then(stream => {
                 console.log('[DiscordMod] Transmissão iniciada! Vinculando preview local no player...');
                 attachStreamToNativePlayer(stream, true);
@@ -283,6 +301,30 @@
   }
 
   // 6. Integração do Player com o Ciclo de Vida do React / DOM
+  function isChatOrEmbedMedia(el) {
+    if (!el || typeof el.closest !== 'function') return false;
+    return Boolean(
+      el.closest(
+        '[class*="chat_"], [class*="messagesWrapper_"], [class*="messageContent_"], ' +
+        '[class*="message_"], [class*="slateTextArea_"], [class*="mediaAttachmentsContainer_"], ' +
+        '[class*="embedWrapper_"], [class*="reactions_"], [class*="expressionPicker_"], ' +
+        '[class*="gifFavoriteButton_"], [class*="avatarDecoration_"]'
+      )
+    );
+  }
+
+  function isCallStreamVideo(el) {
+    if (!el || typeof el.closest !== 'function') return false;
+    if (isChatOrEmbedMedia(el)) return false;
+    return Boolean(
+      el.closest(
+        '[class*="videoWrapper_"], [class*="videoContainer_"], [class*="tile_"], ' +
+        '[class*="callContainer_"], [class*="streamContainer_"], [class*="videoGrid_"], ' +
+        '[class*="stageSection_"]'
+      ) || el.id === 'zap-custom-video-player'
+    );
+  }
+
   function attachStreamToNativePlayer(stream, isLocal = false) {
     if (!stream || typeof document === 'undefined') return;
     if (!isLocal) {
@@ -291,14 +333,19 @@
       window.__localMediaStream = stream;
     }
 
-    // Remove qualquer aviso visual residual no container
+    // Oculta avisos visuais no container da chamada sem deletar nós (evita quebrar o React)
     const staleAlerts = document.querySelectorAll('[class*="streamPaused_"], [class*="videoOverlay_"]');
-    staleAlerts.forEach(el => el.remove());
+    staleAlerts.forEach(el => {
+      if (isCallStreamVideo(el)) {
+        el.style.setProperty('display', 'none', 'important');
+      }
+    });
 
-    // Localiza elementos <video> ativos (ignorando tags dummy de 2x2 do Discord)
+    // Localiza elementos <video> ativos EXCLUSIVAMENTE na chamada (protegendo 100% os GIFs e vídeos do chat)
     const videoElements = Array.from(document.querySelectorAll('video')).filter(v => {
       const isDummy = v.width === 2 || v.height === 2 || (v.offsetWidth < 50 && v.offsetHeight < 50 && v.offsetWidth > 0);
-      return !isDummy;
+      if (isDummy) return false;
+      return isCallStreamVideo(v);
     });
 
     let attached = false;
@@ -315,7 +362,7 @@
     // Se o Discord ainda não montou tag <video> na célula da transmissão, injeta nosso player nativo
     if (!attached) {
       const container = document.querySelector('[class*="videoWrapper_"], [class*="videoContainer_"], [class*="tile_"]');
-      if (container) {
+      if (container && isCallStreamVideo(container)) {
         let player = document.getElementById('zap-custom-video-player');
         if (!player) {
           player = document.createElement('video');
@@ -337,7 +384,7 @@
     if (typeof document === 'undefined') return;
     window.__activeMediaStream = null;
     window.__localMediaStream = null;
-    const videoElements = document.querySelectorAll('video');
+    const videoElements = Array.from(document.querySelectorAll('video')).filter(v => isCallStreamVideo(v));
     for (const video of videoElements) {
       if (video && video.srcObject) {
         video.srcObject = null;

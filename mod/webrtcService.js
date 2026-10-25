@@ -247,15 +247,67 @@ export class WebRTCService {
     return lines.join('\r\n');
   }
 
-  // --- 1. Captura de Tela Nativa (1080p60 + Áudio) sem erros de restrição ---
-  async startScreenCapture() {
+  // --- 1. Captura de Tela ou Aplicativo (1080p60 + Áudio) ---
+  async startScreenCapture(sourceId = null) {
     if (this.localStream) {
       return this.localStream;
     }
 
-    console.log('[WebRTCService] Solicitando captura de tela nativa 1080p60...');
+    console.log('[WebRTCService] Solicitando captura nativa 1080p60...', sourceId ? 'sourceId: ' + sourceId : 'tela padrão');
 
-    // 1. getDisplayMedia padrão com áudio seguro (evita AbortError: Invalid capture constraints)
+    // 1. Se um sourceId específico foi selecionado (janela de aplicativo ou tela do modal)
+    if (sourceId) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            mandatory: {
+              chromeMediaSource: 'desktop'
+            }
+          },
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: sourceId,
+              minWidth: 1280,
+              maxWidth: 1920,
+              minHeight: 720,
+              maxHeight: 1080,
+              minFrameRate: 30,
+              maxFrameRate: 60
+            }
+          }
+        });
+        this.localStream = stream;
+        this.setupStreamEndedHandler(stream);
+        return stream;
+      } catch (audioErr) {
+        console.warn('[WebRTCService] Captura com áudio falhou para sourceId, tentando somente vídeo:', audioErr);
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: sourceId,
+                minWidth: 1280,
+                maxWidth: 1920,
+                minHeight: 720,
+                maxHeight: 1080,
+                minFrameRate: 30,
+                maxFrameRate: 60
+              }
+            }
+          });
+          this.localStream = stream;
+          this.setupStreamEndedHandler(stream);
+          return stream;
+        } catch (videoErr) {
+          console.warn('[WebRTCService] Falha ao capturar sourceId direto, tentando métodos alternativos:', videoErr);
+        }
+      }
+    }
+
+    // 2. getDisplayMedia padrão com áudio seguro (evita AbortError: Invalid capture constraints)
     if (navigator.mediaDevices?.getDisplayMedia) {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -291,11 +343,13 @@ export class WebRTCService {
       }
     }
 
-    // 2. Fallback: DiscordNative desktopCapture com prioridade para tela inteira (Desktop Duplication)
+    // 3. Fallback: DiscordNative desktopCapture com prioridade para tela inteira (Desktop Duplication)
     if (window.DiscordNative?.desktopCapture?.getSources) {
       const sources = await window.DiscordNative.desktopCapture.getSources({ types: ['screen', 'window'] });
       if (sources && sources.length > 0) {
-        const target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
+        const target = (sourceId && sources.find(s => s.id === sourceId)) ||
+          sources.find(s => s.id.startsWith('screen:')) ||
+          sources[0];
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
@@ -331,12 +385,12 @@ export class WebRTCService {
   }
 
   // --- 2. Início de Transmissão (Broadcaster) ---
-  async startBroadcast(channelId, userId) {
+  async startBroadcast(channelId, userId, sourceId = null) {
     this.activeChannelId = channelId;
     this.currentUserId = userId;
     await this.connectSignaling();
 
-    const stream = await this.startScreenCapture();
+    const stream = await this.startScreenCapture(sourceId);
 
     const pc = new RTCPeerConnection({
       iceServers: this.iceServers,
