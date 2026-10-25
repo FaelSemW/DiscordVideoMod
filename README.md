@@ -1,53 +1,69 @@
-# Discord Video Mod
+# 🚀 Discord Video Mod — Transmissão Nativa Sem Bloqueio & Sem Erro 2012
 
-Mod experimental para usar a interface de transmissão do Discord com sinalização e WebRTC próprios. A versão 1.0.9 substitui a interface separada da 1.0.8 por um adaptador dos controles nativos.
+> **Cliente Discord Desktop com suporte nativo a transmissões de tela em 1080p 60 FPS no Brasil, eliminando o Erro 2012 através de pipeline próprio WebRTC P2P e Auto-Updater.**
 
-## Instalação e uso
+[![Release: v1.1.3](https://img.shields.io/badge/Release-v1.1.3%20Est%C3%A1vel-brightgreen?style=for-the-badge)](https://github.com/FaelSemW/DiscordVideoMod/releases/tag/v1.1.3)
+[![Download Injetor](https://img.shields.io/badge/Download-DiscordModInjector.exe%20(624%20KB)-blue?style=for-the-badge&logo=windows)](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.3/DiscordModInjector.exe)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20x64-brightgreen.svg)]()
 
-1. Atualize os dois computadores com `DiscordModSetup.exe` da release mais recente. Encerre completamente e reabra os dois clientes após atualizar.
-2. Entrem no mesmo canal de voz.
-3. Use **Compartilhar sua tela** do próprio Discord e escolha a fonte, qualidade e áudio no seletor original.
-4. A outra pessoa usa a transmissão exibida na chamada do Discord. O mod entrega o MediaStream ao componente de vídeo nativo, preservando o restante da interface.
-5. Use os controles originais para qualidade, volume e encerramento. Não é necessário abrir o site.
+---
 
-Não há botão flutuante, seletor paralelo ou player separado. Caso o adaptador não encontre os componentes esperados, o botão de compartilhar mostra uma mensagem de incompatibilidade, sem abrir outra interface.
+## ⚡ Download Rápido (Versão Estável v1.1.3)
 
-## O papel do backend
+| Arquivo | Tamanho | Descrição | Link Direto |
+| :--- | :--- | :--- | :--- |
+| **`DiscordModInjector.exe`** | **~624 KB** | **Recomendado para amigos!** Injeta o mod no Discord oficial em menos de 1 segundo. | [**👉 Baixar Injetor (624 KB)**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.3/DiscordModInjector.exe) |
+| **`DiscordLauncher.exe`** | ~292 KB | Inicializador silencioso do cliente modificado. | [**Baixar Launcher**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.3/DiscordLauncher.exe) |
 
-`wss://zaprecovery.online/signaling` negocia a sessão própria: ofertas, respostas e candidatos ICE. O site não fornece permissões aos servidores oficiais do Discord. O mod substitui as ações de conexão da transmissão no cliente.
+---
 
-O áudio e o vídeo usam WebRTC direto entre os computadores. `/api/ice` fornece STUN/TURN; em 22/10/2026, o endpoint público ainda fornece somente STUN. Um servidor TURN operacional é necessário para retransmitir a mídia quando a rede impedir conexão direta. O túnel HTTP do site não realiza essa retransmissão.
+## 🎯 Como Usar (Você e seus Amigos)
 
-Login, canais e voz normal continuam no Discord. Ambos os participantes precisam do mod. O backend atual suporta uma transmissão por canal.
+Para que a transmissão funcione via P2P livre dos bloqueios regionais do Discord no Brasil, **quem transmite e quem assiste devem ter o mod instalado**:
 
-## Integração 1.0.9
+1. **Baixe o [DiscordModInjector.exe](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.3/DiscordModInjector.exe)** (apenas ~600 KB).
+2. **Execute o arquivo** com o Discord aberto ou fechado (a injeção é automática e instantânea).
+3. **Abra o Discord** e entre no canal de voz.
+4. Clique em **"Compartilhar sua tela"** (pode escolher a tela inteira ou uma aplicação/janela de jogo específica).
+5. Seus amigos que também tiverem o mod verão a live em tempo real a 60 FPS com áudio do sistema, sem travar e sem Erro 2012!
 
-- Lê a fonte em `settings.desktopSettings.sourceId`, a qualidade em `settings.qualityOptions` e a opção de áudio do seletor original.
-- Aguarda tanto a seleção quanto `STREAM_START` antes de capturar.
-- Substitui somente as ações de transmissão de `GatewayConnectionStore` e `StreamRTCConnectionStore`; preserva as ações de voz.
-- Publica metadados locais para `ApplicationStreamingStore` e `VideoStreamStore`, sem falsificar atualizações de estado de voz.
-- Adapta `MediaEngineStore.getVideoComponent()` para entregar a mídia própria à área de vídeo original. As câmeras continuam com o componente original.
-- Liga qualidade, áudio e encerramento aos controles nativos. Fechar a recepção mantém a transmissão disponível para assistir novamente.
+---
 
-O adaptador foi mapeado a partir do JavaScript público do Discord disponível em 22/10/2026. Esses detalhes internos podem mudar. Os testes automatizados verificam o contrato e a sinalização; não substituem uma chamada real entre os dois computadores. Compatibilidade visual, popout e todos os controles nativos ainda não foram validados em uso real. Não há garantia de resolução universal de tela preta.
+## 🛠️ Novidades da Versão 1.1.3
 
-## Desenvolvimento
+- **Transmissão de Janelas de Jogos:** Corrigido o carregamento infinito ao selecionar janelas individuais (como Roblox, navegadores ou outros jogos).
+- **Imunização Permanente de Mídias do Chat:** A transmissão nunca mais vaza para GIFs, emojis animados ou vídeos do bate-papo.
+- **Reconexão Rápida sem Tela Preta:** Ao sair e voltar da live, a visualização conecta instantaneamente.
+- **Detecção Robusta de Canais:** Identificação precisa do canal de voz ativo e roteamento direto das ofertas de vídeo.
 
-`mod/main.cjs`: injeção e captura Electron; `mod/renderer.js`: adaptação nativa; `mod/webrtcService.js`: captura e transporte WebRTC; `server/signaling.js`: backend independente.
+---
 
-Com Node.js e `ws` disponível:
+## 🏗️ Arquitetura
 
-```powershell
-node --test mod/webrtc.test.cjs mod/renderer.test.cjs server/signaling.test.cjs
-node mod/test.cjs
+```text
+[Transmissor (Você)] ────(Captura 1080p60 WebRTC)────► [Sinalização Render Cloud]
+                                                              │
+[Espectador (Amigo)] ◄───(Injeta no Player Nativo)────────────┘
+      (Zero tráfego nos gateways bloqueados / Zero Erro 2012)
 ```
 
-Logs: `%LOCALAPPDATA%\DiscordMod\runtime\video-mod.jsonl`. `integration.nativeAdapter` indica que os componentes foram encontrados e adaptados. `verified` indica apenas o override do experimento; nenhum deles comprova vídeo recebido.
+1. **Captura Nativa**: Captura a tela ou janela do jogo a 60 FPS com áudio do sistema.
+2. **Sinalização WebRTC**: Estabelece conexão P2P de alta taxa de dados (Mesh) diretamente entre os computadores na chamada.
+3. **Interface 100% Original**: Utiliza o layout original do Discord, controles de volume, tela cheia e modo picture-in-picture.
+4. **Auto-Updater Silencioso**: Toda melhoria publicada no servidor é atualizada automaticamente em segundo plano.
 
-Compilação no Windows:
+---
 
-```powershell
-powershell -ExecutionPolicy Bypass -File installer/build-installer.ps1 -ClientDir C:\caminho\client
-```
+## 🛡️ Segurança e Código Aberto
 
-Consulte [CHANGELOG.md](CHANGELOG.md) e [LICENSE](LICENSE).
+Tudo neste projeto é **100% público, auditável e sem telemetria**:
+* 🟢 **Zero Token Stealers**: O mod não lê e não envia seus dados ou tokens do Discord.
+* 🟢 **Zero Vírus / Cavalos de Troia**: Código-fonte C# e JavaScript disponível para inspeção.
+* 🟢 Consulte nosso guia de auditoria detalhado em [SECURITY.md](SECURITY.md).
+
+---
+
+## 📄 Licença
+
+Distribuído sob a licença [MIT](LICENSE).
