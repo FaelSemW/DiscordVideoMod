@@ -203,7 +203,6 @@ const wss = new WebSocketServer({ server });
 
 const signalingChannels = new Map(); // channelId -> Map(userId -> ws)
 const activeOffers = new Map();      // channelId -> { broadcasterUserId, sdpOffer }
-const pendingViewerTimers = new Map(); // `${channelId}:${userId}` -> timeoutId
 
 wss.on('connection', (ws) => {
   ws.__alive = true;
@@ -242,29 +241,6 @@ wss.on('connection', (ws) => {
           }));
         }
       }
-    } else if (type === 'stream:offer') {
-      if (sdpOffer) {
-        activeOffers.set(channelId, { broadcasterUserId: userId, sdpOffer });
-      }
-      if (targetUserId) {
-        const timerKey = `${channelId}:${targetUserId}`;
-        if (pendingViewerTimers.has(timerKey)) {
-          clearTimeout(pendingViewerTimers.get(timerKey));
-          pendingViewerTimers.delete(timerKey);
-        }
-      }
-      const peers = signalingChannels.get(channelId);
-      if (peers && targetUserId) {
-        const targetWs = peers.get(targetUserId);
-        if (targetWs && targetWs.readyState === 1) {
-          targetWs.send(JSON.stringify({
-            type: 'stream:available',
-            channelId,
-            broadcasterUserId: userId,
-            sdpOffer
-          }));
-        }
-      }
     } else if (type === 'stream:subscribe') {
       registeredChannel = channelId;
       registeredUser = userId;
@@ -274,39 +250,12 @@ wss.on('connection', (ws) => {
 
       const active = activeOffers.get(channelId);
       if (active && active.broadcasterUserId !== userId) {
-        const peers = signalingChannels.get(channelId);
-        const broadcasterWs = peers ? peers.get(active.broadcasterUserId) : null;
-        if (broadcasterWs && broadcasterWs.readyState === 1) {
-          const timerKey = `${channelId}:${userId}`;
-          if (pendingViewerTimers.has(timerKey)) {
-            clearTimeout(pendingViewerTimers.get(timerKey));
-          }
-          broadcasterWs.send(JSON.stringify({
-            type: 'stream:viewer-join',
-            channelId,
-            subscriberUserId: userId
-          }));
-          const fallbackTimer = setTimeout(() => {
-            pendingViewerTimers.delete(timerKey);
-            const currentActive = activeOffers.get(channelId);
-            if (currentActive && ws.readyState === 1) {
-              ws.send(JSON.stringify({
-                type: 'stream:available',
-                channelId,
-                broadcasterUserId: currentActive.broadcasterUserId,
-                sdpOffer: currentActive.sdpOffer
-              }));
-            }
-          }, 150);
-          pendingViewerTimers.set(timerKey, fallbackTimer);
-        } else {
-          ws.send(JSON.stringify({
-            type: 'stream:available',
-            channelId,
-            broadcasterUserId: active.broadcasterUserId,
-            sdpOffer: active.sdpOffer
-          }));
-        }
+        ws.send(JSON.stringify({
+          type: 'stream:available',
+          channelId,
+          broadcasterUserId: active.broadcasterUserId,
+          sdpOffer: active.sdpOffer
+        }));
       }
     } else if (type === 'stream:answer') {
       const peers = signalingChannels.get(channelId);

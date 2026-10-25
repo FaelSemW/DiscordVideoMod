@@ -29,50 +29,6 @@ if (!global.__rafaVideoTestLoaded) {
     } catch (e) {}
   }
 
-  // --- Auto-Persister: Garante que atualizações do próprio Discord nunca removam o Mod ---
-  function ensureDiscordHookPersisted() {
-    try {
-      const localAppData = process.env.LOCALAPPDATA;
-      if (!localAppData) return;
-
-      const mainCjsPath = path.join(__dirname, 'main.cjs').replace(/\\/g, '\\\\');
-      const loaderCode = `// Rafa video experiment loader v1\ntry {\n  require('${mainCjsPath}');\n} catch (e) { console.error('[Mod] Falha:', e); }\nmodule.exports = require('./core.asar');\n`;
-
-      const discordDirs = ['Discord', 'DiscordCanary', 'DiscordPTB'].map(d => path.join(localAppData, d));
-      for (const baseDir of discordDirs) {
-        if (!fs.existsSync(baseDir)) continue;
-        let appDirs = [];
-        try {
-          appDirs = fs.readdirSync(baseDir, { withFileTypes: true })
-            .filter(d => d.isDirectory() && d.name.startsWith('app-'))
-            .map(d => path.join(baseDir, d.name, 'modules'));
-        } catch {}
-
-        for (const modulesDir of appDirs) {
-          if (!fs.existsSync(modulesDir)) continue;
-          try {
-            const modFolders = fs.readdirSync(modulesDir, { withFileTypes: true })
-              .filter(d => d.isDirectory() && d.name.startsWith('discord_desktop_core'));
-            for (const mf of modFolders) {
-              const indexJs = path.join(modulesDir, mf.name, 'discord_desktop_core', 'index.js');
-              if (fs.existsSync(indexJs)) {
-                const current = fs.readFileSync(indexJs, 'utf8');
-                if (!current.includes('Rafa video experiment loader')) {
-                  fs.writeFileSync(indexJs, loaderCode, 'utf8');
-                  log('hook-auto-healed', { target: indexJs });
-                }
-              }
-            }
-          } catch {}
-        }
-      }
-    } catch (e) {}
-  }
-
-  ensureDiscordHookPersisted();
-  const healInterval = setInterval(ensureDiscordHookPersisted, 60 * 1000);
-  healInterval.unref();
-
   // --- Auto-Updater Client Logic ---
   function fetchUpdatePayload(targetUrl, timeoutMs = 5000) {
     return new Promise((resolve) => {
@@ -237,23 +193,21 @@ if (!global.__rafaVideoTestLoaded) {
           try { origin = new URL(frame.url).origin; } catch { continue; }
           if (!['https://discord.com', 'https://discordapp.com'].includes(origin)) continue;
 
-          let cfg = {};
-          try {
-            cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
-          } catch {}
-          const modVer = cfg.version || '1.1.2';
-
           let webrtcServiceJs = '';
           try {
             const raw = fs.readFileSync(path.join(__dirname, 'webrtcService.js'), 'utf8');
-            webrtcServiceJs = `if (!window.WebRTCService || window.__ZAP_WEBRTC_VERSION__ !== ${JSON.stringify(modVer)}) {\n` +
-              `window.__ZAP_WEBRTC_VERSION__ = ${JSON.stringify(modVer)};\n` +
+            webrtcServiceJs = 'if (!window.WebRTCService) {\n' +
               raw.replace('export class WebRTCService', 'window.WebRTCService = class WebRTCService') +
               '\n}\n';
           } catch (e) {}
 
+          let cfg = {};
+          try {
+            cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
+          } catch {}
+
           const candidate = await frame.executeJavaScript(
-            `window.__DISCORD_MOD_VERSION__ = ${JSON.stringify(modVer)};\n` +
+            `window.__DISCORD_MOD_VERSION__ = ${JSON.stringify(cfg.version || '1.0.0-stable')};\n` +
             `window.__ZAP_CONFIG__ = ${JSON.stringify(cfg)};\n` +
             webrtcServiceJs + '\n' +
             fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8')
