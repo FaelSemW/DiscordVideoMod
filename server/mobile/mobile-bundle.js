@@ -1,6 +1,6 @@
 /**
  * Discord Video Mod Mobile - OTA Bundle v1.1.0-mobile
- * Gerado em: 2026-10-25T00:16:15.397Z
+ * Gerado em: 2026-10-25T02:29:46.342Z
  */
 (function(global, window, config) {
   'use strict';
@@ -367,17 +367,27 @@ class MobileNativeDispatcherHook {
   findModules() {
     // 1. Tenta via loaders conhecidos de React Native Mods (Revenge / Bunny / Vendetta)
     const v = this.root.vendetta || this.root.bunny || this.root.enmity;
-    if (v?.metro?.findByProps) {
-      const getVoice = v.metro.findByProps('getVoiceChannelId', 'getChannelId');
-      const getUser = v.metro.findByProps('getCurrentUser');
-      const getDispatcher = v.metro.findByProps('dispatch', 'subscribe');
-      const getExperiments = v.metro.findByProps('getClientOverrides');
+    if (v?.metro) {
+      const dispatcher = v.metro.common?.FluxDispatcher ||
+        (v.metro.findByProps && v.metro.findByProps('_interceptors')) ||
+        (v.metro.findByProps && v.metro.findByProps('dispatch', 'subscribe'));
+
+      const voiceStore = (v.metro.findByStoreName && v.metro.findByStoreName('SelectedChannelStore')) ||
+        (v.metro.findByProps && v.metro.findByProps('getVoiceChannelId', 'getChannelId')) ||
+        v.metro.common?.channels;
+
+      const userStore = (v.metro.findByStoreName && v.metro.findByStoreName('UserStore')) ||
+        (v.metro.findByProps && v.metro.findByProps('getCurrentUser'));
+
+      const experimentStore = (v.metro.findByStoreName && v.metro.findByStoreName('ApexExperimentStore')) ||
+        (v.metro.findByStoreName && v.metro.findByStoreName('ExperimentStore')) ||
+        (v.metro.findByProps && v.metro.findByProps('getClientOverrides'));
 
       return {
-        voiceStore: getVoice,
-        userStore: getUser,
-        dispatcher: getDispatcher,
-        experimentStore: getExperiments
+        voiceStore,
+        userStore,
+        dispatcher,
+        experimentStore
       };
     }
 
@@ -410,34 +420,79 @@ class MobileNativeDispatcherHook {
     };
   }
 
-  installOverrides(modules) {
-    const { userStore, experimentStore, dispatcher } = modules;
+  installOverrides(initialModules) {
+    const applyAll = () => {
+      const modules = this.findModules();
+      const userStore = modules.userStore || initialModules?.userStore;
+      const experimentStore = modules.experimentStore || initialModules?.experimentStore;
+      const dispatcher = modules.dispatcher || initialModules?.dispatcher;
 
-    // Desbloqueia developer flags no usuário atual
-    try {
-      const user = userStore?.getCurrentUser?.();
-      if (user) {
-        Object.defineProperty(user, 'isDeveloper', { get: () => true, configurable: true });
-        Object.defineProperty(user, 'isStaff', { get: () => true, configurable: true });
-        if (user.constructor?.prototype) {
-          try {
+      // 1. Desbloqueia developer flags no usuário atual
+      try {
+        const user = userStore?.getCurrentUser?.();
+        if (user) {
+          Object.defineProperty(user, 'isDeveloper', { get: () => true, configurable: true });
+          Object.defineProperty(user, 'isStaff', { get: () => true, configurable: true });
+          if (user.constructor?.prototype) {
             Object.defineProperty(user.constructor.prototype, 'isDeveloper', { get: () => true, configurable: true });
             Object.defineProperty(user.constructor.prototype, 'isStaff', { get: () => true, configurable: true });
-          } catch (e) {}
+          }
         }
-      }
-    } catch (e) {}
-
-    // Aplica bypass no Video Guard
-    if (dispatcher && experimentStore) {
-      try {
-        dispatcher.dispatch({
-          type: 'APEX_EXPERIMENT_OVERRIDE_CREATE',
-          experimentName: '2026-08-video-guard',
-          variantId: -1
-        });
       } catch (e) {}
+
+      // 2. Hook direto no protótipo de ApexExperimentStore
+      if (experimentStore) {
+        try {
+          const proto = Object.getPrototypeOf(experimentStore) || experimentStore;
+          if (proto.getClientOverrides && !proto.__zapPatched) {
+            proto.__zapPatched = true;
+            const origOverrides = proto.getClientOverrides;
+            proto.getClientOverrides = function() {
+              const res = origOverrides.call(this) || {};
+              res['2026-08-video-guard'] = { variantId: -1 };
+              return res;
+            };
+          }
+          if (proto.getExperimentBucket && !proto.__zapBucketPatched) {
+            proto.__zapBucketPatched = true;
+            const origBucket = proto.getExperimentBucket;
+            proto.getExperimentBucket = function(exp) {
+              if (exp === '2026-08-video-guard') return -1;
+              return origBucket.call(this, exp);
+            };
+          }
+        } catch (e) {}
+      }
+
+      // 3. Dispara a ação de override contínua no Dispatcher
+      if (dispatcher && typeof dispatcher.dispatch === 'function') {
+        try {
+          dispatcher.dispatch({
+            type: 'APEX_EXPERIMENT_OVERRIDE_CREATE',
+            experimentName: '2026-08-video-guard',
+            variantId: -1
+          });
+        } catch (e) {}
+      }
+    };
+
+    // Aplica imediatamente
+    applyAll();
+
+    // Se inscreve nos eventos do ciclo de vida do Discord
+    const modules = this.findModules();
+    const dispatcher = modules.dispatcher || initialModules?.dispatcher;
+    if (dispatcher && typeof dispatcher.subscribe === 'function') {
+      try { dispatcher.subscribe('CONNECTION_OPEN', applyAll); } catch (e) {}
+      try { dispatcher.subscribe('CURRENT_USER_UPDATE', applyAll); } catch (e) {}
+      try { dispatcher.subscribe('APEX_EXPERIMENTS_FETCH_SUCCESS', applyAll); } catch (e) {}
+      try { dispatcher.subscribe('VOICE_CHANNEL_SELECT', applyAll); } catch (e) {}
+      try { dispatcher.subscribe('MEDIA_ENGINE_SET_GO_LIVE', applyAll); } catch (e) {}
+      try { dispatcher.subscribe('RTC_CONNECTION_STATE', applyAll); } catch (e) {}
     }
+
+    // Intervalo contínuo de segurança a cada 1.5s
+    setInterval(applyAll, 1500);
   }
 
   getVoiceChannelId() {
