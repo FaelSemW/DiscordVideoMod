@@ -159,33 +159,21 @@ export class WebRTCService {
       this.broadcasterUserId = broadcasterUserId;
       this.emit('streamAvailable', { channelId, broadcasterUserId });
 
-      if (!this.localStream) {
-        if (!this.activeChannelId) this.activeChannelId = channelId;
+      if (!this.localStream && this.activeChannelId === channelId) {
         await this.handleIncomingOffer(sdpOffer, broadcasterUserId);
       }
     }
 
     // Resposta SDP recebida pelo transmissor
     else if (type === 'stream:answer') {
-      const viewerId = subscriberUserId || fromUserId;
-      console.log(`[WebRTCService] Recebida SDP Answer de ${viewerId}`);
-      const pc = this.broadcasterPcs.get(viewerId) || this.broadcasterPcs.get('initial');
+      console.log(`[WebRTCService] Recebida SDP Answer de ${subscriberUserId}`);
+      const pc = this.broadcasterPcs.get(subscriberUserId) || this.broadcasterPcs.get('initial');
       if (pc && pc.signalingState === 'have-local-offer') {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(sdpAnswer));
-          console.log(`[WebRTCService] Conexão P2P com ${viewerId} concluída com sucesso!`);
         } catch (e) {
           console.warn('[WebRTCService] Erro ao aplicar answer:', e);
         }
-      }
-    }
-
-    // Espectador solicitou assistir ou re-assistir a transmissão (resolve a tela preta ao sair e voltar)
-    else if (type === 'stream:viewer-request') {
-      const viewerId = subscriberUserId || fromUserId;
-      console.log(`[WebRTCService] Solicitação de visualização do espectador: ${viewerId}`);
-      if (this.localStream && viewerId) {
-        await this.createDedicatedOfferForViewer(viewerId);
       }
     }
 
@@ -259,59 +247,15 @@ export class WebRTCService {
     return lines.join('\r\n');
   }
 
-  // --- 1. Captura de Tela ou Aplicativo (1080p60 + Áudio) ---
-  async startScreenCapture(sourceId = null) {
+  // --- 1. Captura de Tela Nativa (1080p60 + Áudio) sem erros de restrição ---
+  async startScreenCapture() {
     if (this.localStream) {
       return this.localStream;
     }
 
-    console.log('[WebRTCService] Solicitando captura nativa 1080p60...', sourceId ? 'sourceId: ' + sourceId : 'tela padrão');
+    console.log('[WebRTCService] Solicitando captura de tela nativa 1080p60...');
 
-    // 1. Se um sourceId específico foi selecionado (janela de aplicativo ou tela do modal)
-    if (sourceId && (sourceId.startsWith('window:') || sourceId.startsWith('screen:'))) {
-      const isWindow = sourceId.startsWith('window:');
-      console.log('[WebRTCService] Capturando diretamente:', isWindow ? 'Janela de Aplicativo' : 'Tela', 'com ID:', sourceId);
-
-      const videoConstraints = {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: sourceId,
-          maxWidth: 1920,
-          maxHeight: 1080,
-          maxFrameRate: 60
-        }
-      };
-
-      // Se for tela cheia, tenta áudio de loopback desktop primeiro
-      if (!isWindow) {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: { mandatory: { chromeMediaSource: 'desktop' } },
-            video: videoConstraints
-          });
-          this.localStream = stream;
-          this.setupStreamEndedHandler(stream);
-          return stream;
-        } catch (audioErr) {
-          console.warn('[WebRTCService] Áudio de tela falhou, tentando somente vídeo:', audioErr);
-        }
-      }
-
-      // Para janela de aplicativo (ou tela se áudio falhar): captura somente vídeo limpa sem restrições de tamanho
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: videoConstraints
-        });
-        this.localStream = stream;
-        this.setupStreamEndedHandler(stream);
-        return stream;
-      } catch (videoErr) {
-        console.warn('[WebRTCService] Falha na captura direta de ' + sourceId + ', tentando métodos alternativos:', videoErr);
-      }
-    }
-
-    // 2. getDisplayMedia padrão com áudio seguro (evita AbortError: Invalid capture constraints)
+    // 1. getDisplayMedia padrão com áudio seguro (evita AbortError: Invalid capture constraints)
     if (navigator.mediaDevices?.getDisplayMedia) {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -347,21 +291,22 @@ export class WebRTCService {
       }
     }
 
-    // 3. Fallback: DiscordNative desktopCapture com prioridade para tela inteira (Desktop Duplication)
+    // 2. Fallback: DiscordNative desktopCapture com prioridade para tela inteira (Desktop Duplication)
     if (window.DiscordNative?.desktopCapture?.getSources) {
       const sources = await window.DiscordNative.desktopCapture.getSources({ types: ['screen', 'window'] });
       if (sources && sources.length > 0) {
-        const target = (sourceId && sources.find(s => s.id === sourceId)) ||
-          sources.find(s => s.id.startsWith('screen:')) ||
-          sources[0];
+        const target = sources.find(s => s.id.startsWith('screen:')) || sources[0];
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
             mandatory: {
               chromeMediaSource: 'desktop',
               chromeMediaSourceId: target.id,
+              minWidth: 1280,
               maxWidth: 1920,
+              minHeight: 720,
               maxHeight: 1080,
+              minFrameRate: 30,
               maxFrameRate: 60
             }
           }
@@ -375,60 +320,6 @@ export class WebRTCService {
     throw new Error('Nenhum método de captura de tela nativa disponível.');
   }
 
-  // Gera oferta SDP dedicada para um espectador específico (permite múltiplos espectadores e sair/voltar sem tela preta)
-  async createDedicatedOfferForViewer(viewerId) {
-    if (!this.localStream) return;
-
-    if (this.broadcasterPcs.has(viewerId)) {
-      try { this.broadcasterPcs.get(viewerId).close(); } catch {}
-      this.broadcasterPcs.delete(viewerId);
-    }
-
-    const pc = new RTCPeerConnection({
-      iceServers: this.iceServers,
-      bundlePolicy: 'max-bundle'
-    });
-
-    this.localStream.getTracks().forEach((track) => {
-      pc.addTrack(track, this.localStream);
-    });
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.sendSignal({
-          type: 'stream:ice-candidate',
-          channelId: this.activeChannelId,
-          userId: this.currentUserId,
-          targetUserId: viewerId,
-          candidate: event.candidate.toJSON()
-        });
-      }
-    };
-
-    const offer = await pc.createOffer({
-      offerToReceiveVideo: false,
-      offerToReceiveAudio: false
-    });
-
-    const modifiedOffer = new RTCSessionDescription({
-      type: offer.type,
-      sdp: this.setHighBitrate(offer.sdp)
-    });
-
-    await pc.setLocalDescription(modifiedOffer);
-    this.broadcasterPcs.set(viewerId, pc);
-
-    this.sendSignal({
-      type: 'stream:offer',
-      channelId: this.activeChannelId,
-      userId: this.currentUserId,
-      targetUserId: viewerId,
-      sdpOffer: pc.localDescription
-    });
-
-    console.log(`[WebRTCService] Oferta dedicada enviada para o espectador ${viewerId}`);
-  }
-
   setupStreamEndedHandler(stream) {
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
@@ -440,12 +331,12 @@ export class WebRTCService {
   }
 
   // --- 2. Início de Transmissão (Broadcaster) ---
-  async startBroadcast(channelId, userId, sourceId = null) {
+  async startBroadcast(channelId, userId) {
     this.activeChannelId = channelId;
     this.currentUserId = userId;
     await this.connectSignaling();
 
-    const stream = await this.startScreenCapture(sourceId);
+    const stream = await this.startScreenCapture();
 
     const pc = new RTCPeerConnection({
       iceServers: this.iceServers,

@@ -24,17 +24,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === '/health' || req.url === '/api/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', time: new Date().toISOString() }));
+  if (req.url === '/download' || req.url === '/download/injector') {
+    res.writeHead(302, { 'Location': 'https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.0/DiscordModInjector.exe' });
+    res.end();
     return;
   }
 
-  if (req.url === '/download' || req.url === '/download/injector') {
-    res.writeHead(302, {
-      'Location': 'https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.3/DiscordModInjector.exe'
-    });
-    res.end();
+  if (req.url === '/health' || req.url === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', time: new Date().toISOString() }));
     return;
   }
 
@@ -264,19 +262,6 @@ wss.on('connection', (ws) => {
           broadcasterUserId: active.broadcasterUserId,
           sdpOffer: active.sdpOffer
         }));
-      }
-    } else if (type === 'stream:offer') {
-      const peers = signalingChannels.get(channelId);
-      if (peers && targetUserId) {
-        const targetWs = peers.get(targetUserId);
-        if (targetWs && targetWs.readyState === 1) {
-          targetWs.send(JSON.stringify({
-            type: 'stream:available',
-            channelId,
-            broadcasterUserId: userId,
-            sdpOffer
-          }));
-        }
       }
     } else if (type === 'stream:answer') {
       const peers = signalingChannels.get(channelId);
