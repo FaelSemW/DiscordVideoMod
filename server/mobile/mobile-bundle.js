@@ -1,6 +1,6 @@
 /**
  * Discord Video Mod Mobile - OTA Bundle v1.1.0-mobile
- * Gerado em: 2026-10-28T15:44:07.579Z
+ * Gerado em: 2026-10-28T18:12:13.219Z
  */
 (function(global, window, config) {
   'use strict';
@@ -1145,6 +1145,8 @@ class MobilePlayerController {
     this.wrapperInstalled = false;
     this.wrapperRendered = false;
     this.ebPatched = false;
+    this.rootEBInstance = null;
+    this.activeOverlayInstance = null;
     this.autoOpenedForBroadcaster = null;
   }
 
@@ -1245,12 +1247,31 @@ class MobilePlayerController {
     if (!this.OverlayComp) {
       this.OverlayComp = function DiscordModLiveOverlay() {
         const [st, setSt] = React.useState(() => ({ ...controller.state }));
+        const instanceRef = React.useRef(null);
+        if (!instanceRef.current) {
+          instanceRef.current = Symbol('overlay-instance');
+        }
+        if (!controller.activeOverlayInstance) {
+          controller.activeOverlayInstance = instanceRef.current;
+        }
 
         React.useEffect(() => {
+          if (!controller.activeOverlayInstance) {
+            controller.activeOverlayInstance = instanceRef.current;
+          }
           const listener = (next) => setSt(next);
           controller.subscribers.add(listener);
-          return () => controller.subscribers.delete(listener);
+          return () => {
+            controller.subscribers.delete(listener);
+            if (controller.activeOverlayInstance === instanceRef.current) {
+              controller.activeOverlayInstance = null;
+            }
+          };
         }, []);
+
+        if (controller.activeOverlayInstance && controller.activeOverlayInstance !== instanceRef.current) {
+          return null;
+        }
 
         if (!st.channelId) return null;
 
@@ -1503,23 +1524,42 @@ class MobilePlayerController {
       }
     }
 
-    // Fallback redundante via ErrorBoundary caso AppRegistry.runApplication já tenha ocorrido antes do wrapper
+    // Fallback via ErrorBoundary raiz (usando React.Fragment sem alterar Flexbox do Discord)
     if (!this.ebPatched) {
       try {
         const v = this.root.vendetta || this.root.bunny || this.root.revenge || this.root.enmity;
         const EB = v?.metro?.findByName?.('ErrorBoundary');
         if (EB?.prototype?.render && v?.patcher?.after) {
           this.ebPatched = true;
+          if (typeof EB.prototype.componentWillUnmount === 'function') {
+            v.patcher.before('componentWillUnmount', EB.prototype, function() {
+              if (controller.rootEBInstance === this) {
+                controller.rootEBInstance = null;
+              }
+            });
+          } else {
+            EB.prototype.componentWillUnmount = function() {
+              if (controller.rootEBInstance === this) {
+                controller.rootEBInstance = null;
+              }
+            };
+          }
           v.patcher.after('render', EB.prototype, function(args, ret) {
             if (controller.wrapperRendered) return ret;
+            if (!controller.rootEBInstance) {
+              controller.rootEBInstance = this;
+            }
+            if (controller.rootEBInstance !== this) {
+              return ret;
+            }
             return React.createElement(
-              RN.View,
-              { style: { flex: 1 } },
+              React.Fragment || RN.View,
+              null,
               ret,
               React.createElement(DiscordModLiveOverlay, null)
             );
           });
-          console.log('[DiscordVideoMod] ErrorBoundary fallback overlay registrado!');
+          console.log('[DiscordVideoMod] ErrorBoundary root-only Fragment overlay registrado!');
         }
       } catch (e) {}
     }
