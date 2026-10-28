@@ -1,6 +1,6 @@
 /**
  * Discord Video Mod Mobile - OTA Bundle v1.1.0-mobile
- * Gerado em: 2026-10-28T15:12:48.716Z
+ * Gerado em: 2026-10-28T15:44:07.579Z
  */
 (function(global, window, config) {
   'use strict';
@@ -842,7 +842,7 @@ function buildWebRTCPlayerHtml(channelId, userId, signalingUrl) {
 </head>
 <body>
 <div id="stage">
-  <video id="live-video" autoplay playsinline></video>
+  <video id="live-video" autoplay playsinline webkit-playsinline></video>
   <button id="unmute-banner" onclick="forceUnmute()">🔊 Toque para ativar o som</button>
   <div id="overlay-status">
     <div class="spinner" id="status-spinner"></div>
@@ -1267,7 +1267,7 @@ class MobilePlayerController {
               pointerEvents: 'box-none',
               style: {
                 position: 'absolute',
-                top: 48,
+                top: 58,
                 right: 12,
                 zIndex: 999999,
                 elevation: 999
@@ -1353,8 +1353,8 @@ class MobilePlayerController {
             View,
             {
               style: {
-                height: isMini ? 32 : 52,
-                paddingTop: isMini ? 0 : 10,
+                height: isMini ? 32 : 82,
+                paddingTop: isMini ? 0 : 38,
                 paddingHorizontal: 10,
                 backgroundColor: '#111214',
                 flexDirection: 'row',
