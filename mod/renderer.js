@@ -13,6 +13,23 @@
     );
   }
 
+  // FIX 1.1.4: o main.cjs reexecuta este script a cada 4s. Se já está tudo aplicado,
+  // sai cedo em vez de varrer todos os módulos do Discord de novo (causava travadinhas).
+  if (window.__zapReady && window.__zapStoreRef) {
+    try {
+      const cur = window.__zapStoreRef.getClientOverrides()?.[primaryExperiment];
+      if (enabled ? cur?.variantId === -1 : cur == null) {
+        return {
+          status: enabled ? 'applied' : 'disabled',
+          verified: true,
+          experimentName: primaryExperiment,
+          appliedList: window.__zapAppliedList || [],
+          devUnlocked: true
+        };
+      }
+    } catch {}
+  }
+
   const chunks = window.webpackChunkdiscord_app;
   if (!chunks || typeof chunks.push !== 'function') return { status: 'waiting-webpack' };
 
@@ -70,7 +87,22 @@
     catch { return false; }
   });
 
+  let selectedChannelStore = null;
+  try {
+    selectedChannelStore = candidates.find(x => {
+      try { return x && typeof x.getVoiceChannelId === 'function' && x.getName?.() === 'SelectedChannelStore'; }
+      catch { return false; }
+    }) || null;
+  } catch {}
+
   function getActiveVoiceChannelId() {
+    // FIX 1.1.4: usa direto o store certo (evita milhares de avisos no log); se não achar, cai no método da 1.1.0
+    if (selectedChannelStore) {
+      try {
+        const id = selectedChannelStore.getVoiceChannelId();
+        return (typeof id === 'string' && /^\d+$/.test(id)) ? id : null;
+      } catch {}
+    }
     for (const c of candidates) {
       try {
         if (c && typeof c.getVoiceChannelId === 'function') {
@@ -211,9 +243,12 @@
       }
 
       const service = window.__zapWebRTCInstance;
-      const voiceChannelId = event.channelId ||
+      const needsChannel = event.type === 'STREAM_START' ||
+        event.type === 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE' ||
+        event.type === 'STREAM_WATCH';
+      const voiceChannelId = needsChannel ? (event.channelId ||
         (event.streamKey ? event.streamKey.split(':')[2] : null) ||
-        getActiveVoiceChannelId();
+        getActiveVoiceChannelId()) : null;
       const currentUser = userStore?.getCurrentUser?.();
 
       // Intercepta ação de iniciar transmissão nativa (Go Live)
@@ -292,22 +327,32 @@
     }
 
     // Remove qualquer aviso visual residual no container
+    // FIX 1.1.4: esconde em vez de remover (remover nós do React pode quebrar a renderização)
     const staleAlerts = document.querySelectorAll('[class*="streamPaused_"], [class*="videoOverlay_"]');
-    staleAlerts.forEach(el => el.remove());
+    staleAlerts.forEach(el => { if (el.style.display !== 'none') el.style.display = 'none'; });
 
     // Localiza elementos <video> ativos (ignorando tags dummy de 2x2 do Discord)
     const videoElements = Array.from(document.querySelectorAll('video')).filter(v => {
       const isDummy = v.width === 2 || v.height === 2 || (v.offsetWidth < 50 && v.offsetHeight < 50 && v.offsetWidth > 0);
-      return !isDummy;
+      if (isDummy) return false;
+      // FIX 1.1.4: GIFs e vídeos do chat têm link http(s) próprio. Nunca são o player da live.
+      if (isWebMediaVideo(v)) {
+        if (v.srcObject && v.srcObject === stream) v.srcObject = null;
+        return false;
+      }
+      return true;
     });
 
     let attached = false;
     for (const video of videoElements) {
       if (video) {
-        if (video.srcObject !== stream) video.srcObject = stream;
-        video.muted = isLocal;
-        video.volume = isLocal ? 0 : 1.0;
-        video.play().catch(e => console.warn('[DiscordMod] Video.play aviso:', e));
+        // FIX 1.1.4: só configura volume quando liga o stream (antes resetava o volume a cada mudança na tela)
+        if (video.srcObject !== stream) {
+          video.srcObject = stream;
+          video.muted = isLocal;
+          video.volume = isLocal ? 0 : 1.0;
+        }
+        if (video.paused) video.play().catch(e => console.warn('[DiscordMod] Video.play aviso:', e));
         attached = true;
       }
     }
@@ -333,13 +378,31 @@
     }
   }
 
+  function isWebMediaVideo(v) {
+    try {
+      const src = v.getAttribute('src') || '';
+      if (/^https?:/i.test(src)) return true;
+      if (v.querySelector('source[src^="http"]')) return true;
+    } catch {}
+    return false;
+  }
+
   function detachStreamFromNativePlayer() {
     if (typeof document === 'undefined') return;
+    // FIX 1.1.4: limpa só os vídeos com o stream do mod (ou streams mortos), sem mexer em webcams/GIFs
+    const ours = new Set([window.__activeMediaStream, window.__localMediaStream].filter(Boolean));
     window.__activeMediaStream = null;
     window.__localMediaStream = null;
     const videoElements = document.querySelectorAll('video');
     for (const video of videoElements) {
-      if (video && video.srcObject) {
+      const s = video && video.srcObject;
+      if (!s) continue;
+      let dead = false;
+      try {
+        const tracks = s.getTracks ? s.getTracks() : [];
+        dead = tracks.length > 0 && tracks.every(t => t.readyState === 'ended');
+      } catch {}
+      if (ours.has(s) || dead) {
         video.srcObject = null;
       }
     }
@@ -349,7 +412,13 @@
 
   // Observador contínuo de montagem de nós <video> no DOM (Resiliência a re-render do React)
   if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined' && !window.__zapVideoObserver) {
+    let zapObserverScheduled = false;
     window.__zapVideoObserver = new MutationObserver(() => {
+      // FIX 1.1.4: agrupa mutações num frame (antes rodava centenas de vezes por segundo)
+      if (zapObserverScheduled) return;
+      zapObserverScheduled = true;
+      requestAnimationFrame(() => {
+      zapObserverScheduled = false;
       const streamToApply = window.__activeMediaStream || window.__localMediaStream;
       const isLocal = !window.__activeMediaStream && Boolean(window.__localMediaStream);
 
@@ -362,8 +431,9 @@
       errorBoxes.forEach(el => {
         const text = el.textContent || '';
         if (text.includes('2012') || text.includes('transmissão não iniciou') || el.className?.includes?.('streamPaused_')) {
-          el.remove();
+          if (el.style.display !== 'none') el.style.display = 'none';
         }
+      });
       });
     });
 
@@ -416,6 +486,11 @@
 
   const current = store.getClientOverrides()?.[primaryExperiment];
   const verified = enabled ? current?.variantId === -1 : current == null;
+  if (verified && window.__zapWebRTCInstance && window.__zapDispatcherIntercepted) {
+    window.__zapReady = true;
+    window.__zapStoreRef = store;
+    window.__zapAppliedList = appliedList;
+  }
 
   return {
     status: verified ? (enabled ? 'applied' : 'disabled') : 'unverified',

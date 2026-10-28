@@ -65,11 +65,15 @@ export class WebRTCService {
 
   // --- Conexão de Sinalização (WebSocket) ---
   connectSignaling() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-      return Promise.resolve();
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      return Promise.resolve(true);
+    }
+    // FIX 1.1.4: se ainda está conectando, espera abrir (antes resolvia na hora e o stream:start se perdia)
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING && this._connectPromise) {
+      return this._connectPromise;
     }
 
-    return new Promise((resolve) => {
+    this._connectPromise = new Promise((resolve) => {
       try {
         console.log(`[WebRTCService] Conectando sinalização em ${this.signalingUrl}...`);
         this.ws = new WebSocket(this.signalingUrl);
@@ -81,10 +85,13 @@ export class WebRTCService {
 
           if (this.activeChannelId && this.currentUserId) {
             if (this.localStream) {
+              // FIX 1.1.4: reenvia a oferta pendente ao reconectar (antes ia sem sdpOffer e ninguém conseguia assistir)
+              const pending = this.broadcasterPcs.get('initial');
               this.sendSignal({
                 type: 'stream:start',
                 channelId: this.activeChannelId,
-                userId: this.currentUserId
+                userId: this.currentUserId,
+                sdpOffer: pending?.localDescription || undefined
               });
             } else {
               this.sendSignal({
@@ -104,6 +111,7 @@ export class WebRTCService {
         this.ws.onclose = () => {
           console.warn('[WebRTCService] WebSocket desconectado. Tentando reconectar...');
           this.stopHeartbeat();
+          resolve(false);
           this.emit('statusChange', { status: 'disconnected' });
           if (!this.isDestroyed) {
             clearTimeout(this.reconnectTimer);
@@ -120,6 +128,7 @@ export class WebRTCService {
         resolve(false);
       }
     });
+    return this._connectPromise;
   }
 
   startHeartbeat() {
@@ -167,10 +176,22 @@ export class WebRTCService {
     // Resposta SDP recebida pelo transmissor
     else if (type === 'stream:answer') {
       console.log(`[WebRTCService] Recebida SDP Answer de ${subscriberUserId}`);
-      const pc = this.broadcasterPcs.get(subscriberUserId) || this.broadcasterPcs.get('initial');
+      // FIX 1.1.4: a oferta pendente ('initial') tem prioridade. Depois de usada, ela passa a pertencer
+      // a esse espectador e uma oferta nova é anunciada para o próximo (sair/voltar e 2+ espectadores).
+      const initial = this.broadcasterPcs.get('initial');
+      const pc = (initial && initial.signalingState === 'have-local-offer')
+        ? initial
+        : this.broadcasterPcs.get(subscriberUserId);
       if (pc && pc.signalingState === 'have-local-offer') {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(sdpAnswer));
+          if (pc === initial && subscriberUserId) {
+            const old = this.broadcasterPcs.get(subscriberUserId);
+            if (old && old !== pc) { try { old.close(); } catch {} }
+            this.broadcasterPcs.set(subscriberUserId, pc);
+            this.broadcasterPcs.delete('initial');
+            this.scheduleOfferRotation(pc);
+          }
         } catch (e) {
           console.warn('[WebRTCService] Erro ao aplicar answer:', e);
         }
@@ -338,6 +359,21 @@ export class WebRTCService {
 
     const stream = await this.startScreenCapture();
 
+    const pc = await this.createBroadcastOffer(stream);
+
+    this.sendSignal({
+      type: 'stream:start',
+      channelId: this.activeChannelId,
+      userId: this.currentUserId,
+      sdpOffer: pc.localDescription
+    });
+
+    console.log('[WebRTCService] Transmissão iniciada e anunciada para o canal:', channelId);
+    return stream;
+  }
+
+  // Cria a conexão/oferta pendente ('initial') — mesmo fluxo da 1.1.0
+  async createBroadcastOffer(stream) {
     const pc = new RTCPeerConnection({
       iceServers: this.iceServers,
       bundlePolicy: 'max-bundle'
@@ -358,6 +394,15 @@ export class WebRTCService {
       }
     };
 
+    // FIX 1.1.4: libera conexões de espectadores que caíram (antes ficavam abertas para sempre)
+    pc.addEventListener('connectionstatechange', () => {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        for (const [key, value] of this.broadcasterPcs) {
+          if (value === pc && key !== 'initial') this.broadcasterPcs.delete(key);
+        }
+      }
+    });
+
     const offer = await pc.createOffer({
       offerToReceiveVideo: false,
       offerToReceiveAudio: false
@@ -369,17 +414,43 @@ export class WebRTCService {
     });
 
     await pc.setLocalDescription(modifiedOffer);
-
-    this.sendSignal({
-      type: 'stream:start',
-      channelId: this.activeChannelId,
-      userId: this.currentUserId,
-      sdpOffer: pc.localDescription
-    });
-
     this.broadcasterPcs.set('initial', pc);
-    console.log('[WebRTCService] Transmissão iniciada e anunciada para o canal:', channelId);
-    return stream;
+    return pc;
+  }
+
+  // FIX 1.1.4: quando a oferta é usada, espera o espectador conectar (ou 10s) e anuncia uma nova.
+  // Espectadores já conectados ignoram (checagem "Sessão P2P já saudável" da 1.1.0).
+  scheduleOfferRotation(usedPc) {
+    let done = false;
+    const rotate = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      this.rotateOffer();
+    };
+    const timer = setTimeout(rotate, 10000);
+    usedPc.addEventListener('connectionstatechange', () => {
+      if (['connected', 'failed', 'closed'].includes(usedPc.connectionState)) rotate();
+    });
+  }
+
+  async rotateOffer() {
+    if (!this.localStream || !this.activeChannelId || !this.currentUserId) return;
+    const pending = this.broadcasterPcs.get('initial');
+    if (pending && pending.signalingState === 'have-local-offer') return;
+    try {
+      const pc = await this.createBroadcastOffer(this.localStream);
+      if (!this.localStream) { try { pc.close(); } catch {} return; }
+      this.sendSignal({
+        type: 'stream:start',
+        channelId: this.activeChannelId,
+        userId: this.currentUserId,
+        sdpOffer: pc.localDescription
+      });
+      console.log('[WebRTCService] Nova oferta anunciada para próximos espectadores.');
+    } catch (e) {
+      console.warn('[WebRTCService] Falha ao renovar oferta:', e);
+    }
   }
 
   // --- 3. Inscrição e Recepção de Transmissão (Viewer) ---
