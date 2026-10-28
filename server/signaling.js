@@ -369,3 +369,5 @@ if (RENDER_EXTERNAL_URL) {
 server.listen(PORT, () => {
   console.log(`[DiscordMod Signaling] Servidor ativo na porta ${PORT}`);
 });
+
+// deploy: mod v1.1.4
