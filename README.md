@@ -1,21 +1,30 @@
 # 🚀 Discord Video Mod — Transmissão Nativa Sem Bloqueio & Sem Erro 2012
 
-> **Cliente Discord Desktop com suporte nativo a transmissões de tela em 1080p 60 FPS no Brasil, eliminando o Erro 2012 através de pipeline próprio WebRTC P2P e Auto-Updater.**
+> **Cliente Discord Desktop com suporte nativo a transmissões de tela e janelas individuais em 1080p 60 FPS no Brasil, faixas de áudio separadas, zero travadas e eliminação definitiva do Erro 2012 através de pipeline próprio WebRTC P2P e Auto-Updater.**
 
-[![Release: v1.1.0](https://img.shields.io/badge/Release-v1.1.0%20Est%C3%A1vel-brightgreen?style=for-the-badge)](https://github.com/FaelSemW/DiscordVideoMod/releases/tag/v1.1.0)
-[![Download Injetor](https://img.shields.io/badge/Download-DiscordModInjector.exe%20(622%20KB)-blue?style=for-the-badge&logo=windows)](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.0/DiscordModInjector.exe)
+[![Release: v1.1.5](https://img.shields.io/badge/Release-v1.1.5%20Est%C3%A1vel-brightgreen?style=for-the-badge)](https://github.com/FaelSemW/DiscordVideoMod/releases/tag/v1.1.5)
+[![Download Injetor](https://img.shields.io/badge/Download-DiscordModInjector.exe%20(628%20KB)-blue?style=for-the-badge&logo=windows)](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordModInjector.exe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-brightgreen.svg)]()
 
 ---
 
-## ⚡ Download Rápido (Versão Estável v1.1.0)
+## ⚡ Download Rápido (Versão Principal v1.1.5)
 
 | Arquivo | Tamanho | Descrição | Link Direto |
 | :--- | :--- | :--- | :--- |
-| **`DiscordModInjector.exe`** | **~622 KB** | **Recomendado para amigos!** Injeta o mod no Discord oficial em menos de 1 segundo. | [**👉 Baixar Injetor (622 KB)**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.0/DiscordModInjector.exe) |
-| **`DiscordLauncher.exe`** | ~292 KB | Inicializador silencioso do cliente modificado. | [**Baixar Launcher**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.0/DiscordLauncher.exe) |
-| **`DiscordModSetup.exe`** | ~208 MB | Instalador completo Tudo-em-Um. | [**Baixar Setup Completo**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.0/DiscordModSetup.exe) |
+| **`DiscordModInjector.exe`** | **~628 KB** | **Recomendado!** Injeta a versão `v1.1.5` no Discord oficial em menos de 1 segundo. | [**👉 Baixar Injetor v1.1.5 (628 KB)**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordModInjector.exe) |
+| **`RestaurarOriginal.exe`** | ~580 KB | Remove o mod e restaura o Discord original limpo. | [**Baixar Restaurador**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/RestaurarOriginal.exe) |
+| **`DiscordLauncher.exe`** | ~292 KB | Inicializador silencioso do cliente modificado. | [**Baixar Launcher**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordLauncher.exe) |
+
+---
+
+## ✨ Novidades da Versão v1.1.5 (Atualização Principal)
+
+- **Seleção Precisa de Aplicativos, Janelas e Telas:** Suporte completo para transmitir apenas um jogo específico (aba *Aplicativos*), uma janela individual (aba *Janelas*) ou o monitor inteiro (aba *Telas*), com troca dinâmica via `replaceTrack`.
+- **Faixas de Áudio 100% Separadas e Sem Eco:** O áudio da janela/jogo transmitido sai exclusivamente na **faixa nativa de transmissão** do Discord (com controle de volume e mute direto no player da live), mantendo a **faixa de voz** exclusiva para os participantes da chamada, sem retorno de voz ou duplicação no Mixer do Windows.
+- **Zero Erro 2012 (Sem Precisar Reiniciar):** Supressão completa de `STREAM_TIMED_OUT`, `MEDIA_ENGINE_SET_GO_LIVE_SOURCE` com erro e ativação imediata do player nativo (`RTC_CONNECTED`).
+- **Zero Travadas ("Stutters"):** Cache em memória para injeção, escrita assíncrona de logs, aceleração de hardware GPU no compositor de vídeo e rotação estável de oferta WebRTC P2P a 1080p 60 FPS.
 
 ---
 
@@ -23,27 +32,10 @@
 
 Para que a transmissão funcione via P2P livre dos bloqueios regionais do Discord no Brasil, **quem transmite e quem assiste devem ter o mod instalado**:
 
-1. **Baixe o [DiscordModInjector.exe](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.0/DiscordModInjector.exe)** (apenas ~600 KB).
-2. **Execute o arquivo** com o Discord aberto ou fechado (a injeção é automática e instantânea).
-3. **Abra o Discord** e entre no canal de voz.
-4. Clique em **"Compartilhar sua tela"**.
-5. Seus amigos que também tiverem o mod verão a live em tempo real a 60 FPS com áudio do sistema, sem travar e sem Erro 2012!
-
----
-
-## 🏗️ Arquitetura
-
-```text
-[Transmissor (Você)] ────(Captura 1080p60 WebRTC)────► [Sinalização Render Cloud]
-                                                              │
-[Espectador (Amigo)] ◄───(Injeta no Player Nativo)────────────┘
-      (Zero tráfego nos gateways bloqueados / Zero Erro 2012)
-```
-
-1. **Captura Nativa**: Captura a tela a 60 FPS com áudio do sistema.
-2. **Sinalização WebRTC**: Estabelece conexão P2P de alta taxa de dados diretamente entre os computadores na chamada.
-3. **Interface 100% Original**: Utiliza o layout original do Discord, controles de volume, tela cheia e modo picture-in-picture.
-4. **Auto-Updater Silencioso**: Toda melhoria publicada no servidor é atualizada automaticamente em segundo plano.
+1. **Baixe o [DiscordModInjector.exe](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordModInjector.exe)** (~628 KB).
+2. **Execute o arquivo** (ele atualiza e abre o Discord automaticamente).
+3. **Entre no canal de voz** e clique em **"Compartilhar sua tela"**.
+4. Escolha qualquer **Aplicativo/Jogo**, **Janela** ou **Tela** e transmita em **1080p 60 FPS** com áudio limpo e controle de volume nativo!
 
 ---
 

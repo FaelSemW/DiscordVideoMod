@@ -25,7 +25,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.url === '/download' || req.url === '/download/injector') {
-    res.writeHead(302, { 'Location': 'https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.0/DiscordModInjector.exe' });
+    res.writeHead(302, { 'Location': 'https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordModInjector.exe' });
     res.end();
     return;
   }

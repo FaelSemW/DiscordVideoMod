@@ -1,3 +1,10 @@
+# 1.1.5 — seleção de janela/jogo, separação limpa de faixas de áudio e zero travadas
+
+- Corrige a seleção individual nas abas **Aplicativos**, **Janelas** e **Telas**, resolvendo o `pid` do jogo para `window:<hwnd>` via `ApplicationSwitchingManager` e capturando `event.settings.desktopSettings.sourceId` e `event.sourceName`.
+- Separa rigorosamente as duas faixas de áudio do Discord: o WebRTC transmite exclusivamente o vídeo (`audio: false` e `<video muted>`), enquanto o `soundshare` nativo do Discord transmite apenas o áudio do PID da janela selecionada na faixa de transmissão (controlável pelo volume/mute do player da live), mantendo a faixa de voz exclusiva para a conversa e sem eco.
+- Elimina o Erro 2012 na primeira tentativa sem necessidade de reiniciar o Discord, suprimindo `STREAM_TIMED_OUT`, `MEDIA_ENGINE_SET_GO_LIVE_SOURCE` com `errorCode` e `STREAM_DELETE` por bloqueio, além de ativar `RTC_CONNECTED` imediatamente na `ApplicationStreamingStore`.
+- Elimina travadas (micro-stutters) durante a transmissão: cache em memória para o payload de injeção no Electron Main, escrita assíncrona de logs, remoção do re-disparo em `did-navigate-in-page`, troca rápida de fonte com `RTCRtpSender.replaceTrack` e estabilização da rotação de oferta WebRTC P2P em 1080p 60 FPS.
+
 # 1.0.9 — transmissão na interface nativa
 
 - Remove os botões, seletor e player separados da 1.0.8. O site permanece apenas como backend de sinalização.
