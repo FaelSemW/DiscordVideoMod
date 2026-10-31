@@ -7,14 +7,13 @@
   if (!window.__zapInitializedLog) {
     window.__zapInitializedLog = true;
     console.log(
-      '%c[DiscordMod]%c Ativo v' + (window.__DISCORD_MOD_VERSION__ || '1.0.0-stable') + ' (P2P 1080p60 Bypass & Cloud 24/7)',
+      '%c[DiscordMod]%c Ativo v' + (window.__DISCORD_MOD_VERSION__ || '1.1.5') + ' (P2P 1080p60 Bypass & Cloud 24/7)',
       'background: #5865F2; color: #ffffff; font-weight: bold; padding: 2px 6px; border-radius: 4px;',
       'color: #57F287; font-weight: bold;'
     );
   }
 
-  // FIX 1.1.4: o main.cjs reexecuta este script a cada 4s. Se já está tudo aplicado,
-  // sai cedo em vez de varrer todos os módulos do Discord de novo (causava travadinhas).
+  // Fast-path: se já está tudo aplicado e validado nesta janela, retorna imediatamente sem escanear módulos Webpack
   if (window.__zapReady && window.__zapStoreRef) {
     try {
       const cur = window.__zapStoreRef.getClientOverrides()?.[primaryExperiment];
@@ -42,7 +41,7 @@
 
   const factories = Object.entries(req.m || {});
 
-  // Collect video-guard experiments
+  // Coleta experimentos de video-guard
   const targetExperiments = new Set([primaryExperiment]);
   for (const [, factory] of factories) {
     const matches = String(factory).match(/202[0-9]-[0-9]{2}-video-guard/g);
@@ -51,7 +50,7 @@
     }
   }
 
-  // Pre-load relevant stores
+  // Pré-carrega módulos e stores essenciais
   const relevant = factories.filter(([, factory]) =>
     /ApexExperimentStore|_orderedActionHandlers|getClientOverrides|UserStore|isDeveloper|SelectedChannelStore|getVoiceChannelId/.test(String(factory))
   );
@@ -95,20 +94,25 @@
     }) || null;
   } catch {}
 
-  function getActiveVoiceChannelId() {
-    // FIX 1.1.4: usa direto o store certo (evita milhares de avisos no log); se não achar, cai no método da 1.1.0
-    if (selectedChannelStore) {
-      try {
-        const id = selectedChannelStore.getVoiceChannelId();
-        return (typeof id === 'string' && /^\d+$/.test(id)) ? id : null;
-      } catch {}
-    }
+  let voiceChannelResolver = null;
+  if (selectedChannelStore && typeof selectedChannelStore.getVoiceChannelId === 'function') {
+    voiceChannelResolver = () => selectedChannelStore.getVoiceChannelId();
+  } else {
     for (const c of candidates) {
       try {
         if (c && typeof c.getVoiceChannelId === 'function') {
-          const id = c.getVoiceChannelId();
-          if (typeof id === 'string' && /^\d+$/.test(id)) return id;
+          voiceChannelResolver = () => c.getVoiceChannelId();
+          break;
         }
+      } catch {}
+    }
+  }
+
+  function getActiveVoiceChannelId() {
+    if (voiceChannelResolver) {
+      try {
+        const id = voiceChannelResolver();
+        return (typeof id === 'string' && /^\d+$/.test(id)) ? id : null;
       } catch {}
     }
     return null;
@@ -116,7 +120,7 @@
 
   if (!dispatcher || !store) return { status: 'waiting-dispatcher-store' };
 
-  // 1. Unlock Developer Experiments (1080p 60fps & unrestrict settings)
+  // 1. Desbloqueia experimentos de desenvolvedor (1080p 60fps)
   let devUnlocked = false;
   try {
     const user = userStore?.getCurrentUser?.();
@@ -134,7 +138,7 @@
     console.warn('[ZapStream] Dev unlock error:', err);
   }
 
-  // 2. Override Video Guard experiment to variant -1 (bypasses region restriction)
+  // 2. Override de Video Guard para variante -1 (elimina bloqueio regional)
   const appliedList = [];
   for (const experimentName of targetExperiments) {
     const previous = store.getClientOverrides()?.[experimentName];
@@ -157,7 +161,7 @@
     }
   }
 
-  // Persistent listener for overrides
+  // Listener persistente de overrides
   if (dispatcher && !window.__zapOverridesSubscribed) {
     window.__zapOverridesSubscribed = true;
     const reapply = () => {
@@ -183,28 +187,31 @@
     try { dispatcher.subscribe('APEX_EXPERIMENTS_FETCH_SUCCESS', reapply); } catch {}
   }
 
-  // 3. Inject CSS to hide Discord Error 2012 / "Transmissão pausada" overlays
+  // 3. Injeta CSS para acelerar o player por hardware (GPU compositor) e ocultar avisos de bloqueio
   if (typeof document !== 'undefined' && !document.getElementById('zap-native-stream-fix')) {
     const style = document.createElement('style');
     style.id = 'zap-native-stream-fix';
     style.textContent = `
-      /* Oculta mensagens oficiais de Erro 2012 e transmissão pausada */
       [class*="videoOverlay_"],
       [class*="streamPaused_"],
       [class*="callAvatarStatus_"],
       [class*="streamNotice_"],
+      div[class*="emptyState_"],
       div[class*="noticeRegionBlocked_"],
       div:has(> [class*="streamPaused_"]) {
         display: none !important;
       }
-      /* Assegura que o elemento de vídeo ocupe o layout completo com controles nativos */
       div[class*="videoWrapper_"] video,
       div[class*="videoContainer_"] video,
-      div[class*="tile_"] video {
+      div[class*="tile_"] video,
+      #zap-custom-video-player {
         object-fit: contain !important;
         width: 100% !important;
         height: 100% !important;
         display: block !important;
+        transform: translate3d(0, 0, 0) !important;
+        will-change: transform !important;
+        backface-visibility: hidden !important;
       }
     `;
     if (document.head) document.head.appendChild(style);
@@ -215,14 +222,18 @@
   if (WebRTCServiceClass && !window.__zapWebRTCInstance) {
     window.__zapWebRTCInstance = new WebRTCServiceClass({
       signalingUrl: ZAP_SIGNALING,
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }]
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ]
     });
 
     const service = window.__zapWebRTCInstance;
     service.connectSignaling();
 
     service.on('remoteStream', (stream) => {
-      console.log('[DiscordMod] Novo stream remoto recebido via WebRTCService!', stream);
+      console.log('[DiscordMod] Novo stream de vídeo recebido via WebRTCService!', stream);
       attachStreamToNativePlayer(stream, false);
     });
 
@@ -232,7 +243,13 @@
     });
   }
 
-  // 5. Interceptação da Camada de Estado / Dispatcher
+  function sendSourcePickToMain(id, name, extra = {}) {
+    try {
+      console.log('[DISCORD_MOD_SOURCE_PICK]' + JSON.stringify({ id: id || null, name: name || null, ...extra }));
+    } catch (e) {}
+  }
+
+  // 5. Interceptação Cirúrgica da Camada de Estado / Dispatcher
   if (dispatcher && !window.__zapDispatcherIntercepted) {
     window.__zapDispatcherIntercepted = true;
     const originalDispatch = dispatcher.dispatch.bind(dispatcher);
@@ -240,6 +257,36 @@
     dispatcher.dispatch = function (event) {
       if (!event || typeof event !== 'object') {
         return originalDispatch(event);
+      }
+
+      // A. Suprime todos os gatilhos de Erro 2012, Timeout e Queda do motor de vídeo oficial na ApplicationStreamingStore
+      if (event.type === 'STREAM_TIMED_OUT') {
+        console.warn('[DiscordMod Dispatcher] Suprimido STREAM_TIMED_OUT para evitar Erro 2012.');
+        return;
+      }
+
+      if (event.type === 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE' && event.errorCode != null) {
+        console.warn('[DiscordMod Dispatcher] Suprimido erro nativo em MEDIA_ENGINE_SET_GO_LIVE_SOURCE:', event.errorCode);
+        return;
+      }
+
+      if (
+        (event.type === 'RTC_CONNECTION_STATE' && (
+          event.errorCode != null ||
+          (event.streamKey && (event.state === 'DISCONNECTED' || event.state === 'RTC_DISCONNECTED'))
+        )) ||
+        (event.type === 'MEDIA_ENGINE_CONNECTION_STATE' && event.errorCode != null)
+      ) {
+        console.warn('[DiscordMod Dispatcher] Suprimido estado de erro/desconexão RTC oficial:', event.type, event.errorCode || event.state);
+        return;
+      }
+
+      if (
+        event.type === 'STREAM_DELETE' &&
+        (event.reason === 'unauthorized' || event.reason === 'stream_full' || event.unavailable === true || event.errorCode != null)
+      ) {
+        console.warn('[DiscordMod Dispatcher] Suprimido STREAM_DELETE por bloqueio:', event.reason);
+        return;
       }
 
       const service = window.__zapWebRTCInstance;
@@ -251,73 +298,156 @@
         getActiveVoiceChannelId()) : null;
       const currentUser = userStore?.getCurrentUser?.();
 
-      // Intercepta ação de iniciar transmissão nativa (Go Live)
-      if (
-        event.type === 'STREAM_START' ||
-        event.type === 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE'
-      ) {
-        const hasSource = event.type === 'STREAM_START' ||
-          Boolean(event.desktopDescription?.id || event.sourceId || event.desktopDescription);
+      // B. Intercepta início de transmissão (abas Aplicativos, Janelas e Telas)
+      if (event.type === 'STREAM_START') {
+        const rawSourceId = event.sourceId || event.desktopDescription?.id || null;
+        const pickedId = (rawSourceId && !String(rawSourceId).startsWith('prepicked:')) ? rawSourceId : null;
+        const pickedName = event.sourceName || event.desktopDescription?.name || null;
+
+        window.__lastPickedSourceId = pickedId;
+        window.__lastPickedSourceName = pickedName;
+        sendSourcePickToMain(pickedId, pickedName, {
+          resetId: !pickedId,
+          resetName: !pickedName
+        });
+
         const targetChannelId = event.channelId || voiceChannelId;
-        console.log('[DiscordMod Dispatcher] Go Live iniciado:', event.type, 'channelId:', targetChannelId);
-        if (service && targetChannelId && currentUser) {
-          if (hasSource) {
-            service.startBroadcast(targetChannelId, currentUser.id)
+        window.__startingStreamBroadcast = true;
+
+        // Executa o dispatch original primeiro para que o ApplicationSwitchingManager resolva o PID do jogo
+        // em "window:<hwnd>" e despache MEDIA_ENGINE_SET_GO_LIVE_SOURCE ativando o soundshare nativo por PID!
+        let result;
+        try {
+          result = originalDispatch(event);
+        } finally {
+          window.__startingStreamBroadcast = false;
+        }
+
+        if (targetChannelId && currentUser) {
+          const streamType = event.streamType || (event.guildId ? 'guild' : 'call');
+          const streamKey = event.guildId
+            ? `${streamType}:${event.guildId}:${targetChannelId}:${currentUser.id}`
+            : `${streamType}:${targetChannelId}:${currentUser.id}`;
+
+          setTimeout(() => {
+            try {
+              originalDispatch({
+                type: 'RTC_CONNECTION_STATE',
+                state: 'RTC_CONNECTED',
+                streamKey,
+                context: 'stream'
+              });
+            } catch (e) {}
+          }, 50);
+
+          if (service) {
+            service.startBroadcast(targetChannelId, currentUser.id, { forceRestart: true })
               .then(stream => {
-                console.log('[DiscordMod] Transmissão iniciada! Vinculando preview local no player...');
+                console.log('[DiscordMod] Transmissão de vídeo iniciada! Vinculando preview local no player...');
                 attachStreamToNativePlayer(stream, true);
               })
               .catch(err => {
                 console.error('[DiscordMod] Falha ao iniciar transmissão no WebRTCService:', err);
               });
-          } else {
-            service.stopBroadcast();
-            detachStreamFromNativePlayer();
           }
         }
+
+        return result;
       }
 
-      // Encerramento de transmissão do usuário local
+      // C. Intercepta definição/troca de fonte Go Live (resolução de PID -> window:hwnd ou troca de janela)
+      if (event.type === 'MEDIA_ENGINE_SET_GO_LIVE_SOURCE') {
+        const desktopSettings = event.settings?.desktopSettings;
+        if (desktopSettings || event.desktopDescription || event.sourceId) {
+          const rawId = desktopSettings?.sourceId ||
+            event.desktopDescription?.id ||
+            (typeof event.desktopDescription === 'string' ? event.desktopDescription : null) ||
+            event.sourceId ||
+            null;
+          const pickedId = (rawId && !String(rawId).startsWith('prepicked:')) ? rawId : null;
+          const pickedName = desktopSettings?.sourceName ||
+            event.desktopDescription?.name ||
+            event.sourceName ||
+            window.__lastPickedSourceName ||
+            null;
+
+          if (pickedId || pickedName) {
+            const sourceChanged = Boolean(pickedId && pickedId !== window.__lastPickedSourceId);
+            if (pickedId) window.__lastPickedSourceId = pickedId;
+            if (pickedName) window.__lastPickedSourceName = pickedName;
+            sendSourcePickToMain(window.__lastPickedSourceId, window.__lastPickedSourceName);
+
+            // Se o usuário trocou a janela transmitida diretamente sem novo STREAM_START, atualiza a captura
+            if (!window.__startingStreamBroadcast && sourceChanged && service && voiceChannelId && currentUser) {
+              service.startBroadcast(voiceChannelId, currentUser.id, { forceRestart: true })
+                .then(stream => {
+                  attachStreamToNativePlayer(stream, true);
+                })
+                .catch(() => {});
+            }
+          }
+        }
+        // NUNCA chama stopBroadcast aqui, pois eventos internos do Discord podem disparar MEDIA_ENGINE_SET_GO_LIVE_SOURCE vazio
+        return originalDispatch(event);
+      }
+
+      // D. Encerramento explícito de transmissão pelo usuário local
       if (event.type === 'STREAM_STOP') {
-        if (event.streamKey && currentUser?.id && event.streamKey.endsWith(currentUser.id)) {
-          console.log('[DiscordMod Dispatcher] Transmissão local finalizada.');
+        if (!event.streamKey || (currentUser?.id && event.streamKey.endsWith(currentUser.id))) {
+          console.log('[DiscordMod Dispatcher] Transmissão local finalizada pelo usuário.');
           if (service) service.stopBroadcast();
           detachStreamFromNativePlayer();
         }
+        return originalDispatch(event);
       }
 
-      // Intercepta clique para assistir stream de participante
+      // E. Intercepta clique para assistir stream de participante
       if (event.type === 'STREAM_WATCH') {
-        console.log('[DiscordMod Dispatcher] Interceptado pedido para assistir stream. Canal:', voiceChannelId);
+        console.log('[DiscordMod Dispatcher] Assistindo transmissão. Canal:', voiceChannelId, 'StreamKey:', event.streamKey);
+        if (event.streamKey) {
+          const parts = String(event.streamKey).split(':');
+          window.__activeStreamerUserId = parts[parts.length - 1];
+        }
+
+        const result = originalDispatch(event);
+
+        // Marca a transmissão como RTC_CONNECTED na ApplicationStreamingStore para abrir o player imediatamente sem Erro 2012
+        if (event.streamKey) {
+          setTimeout(() => {
+            try {
+              originalDispatch({
+                type: 'RTC_CONNECTION_STATE',
+                state: 'RTC_CONNECTED',
+                streamKey: event.streamKey,
+                context: 'stream'
+              });
+            } catch (e) {}
+          }, 50);
+        }
+
         if (service && voiceChannelId && currentUser) {
           service.subscribeToStream(voiceChannelId, currentUser.id);
         }
+
+        return result;
       }
 
-      // Intercepta saída de canal de voz
+      // F. Intercepta saída de canal de voz
       if (event.type === 'VOICE_CHANNEL_SELECT' && !event.channelId) {
         console.log('[DiscordMod Dispatcher] Usuário saiu do canal de voz.');
         if (service) {
           service.leaveChannel();
-          service.stopBroadcast();
           detachStreamFromNativePlayer();
         }
-      }
-
-      // Suprime o Erro 2012 e estados de desconexão da mídia oficial do Discord
-      if (
-        (event.type === 'RTC_CONNECTION_STATE' && (event.errorCode === 2012 || event.state === 'RTC_DISCONNECTED')) ||
-        (event.type === 'MEDIA_ENGINE_CONNECTION_STATE' && event.errorCode === 2012)
-      ) {
-        console.warn('[DiscordMod Dispatcher] Suprimido disparo de Erro 2012 oficial:', event.type);
-        return;
       }
 
       return originalDispatch(event);
     };
   }
 
-  // 6. Integração do Player com o Ciclo de Vida do React / DOM
+  // 6. Integração Otimizada do Player com o DOM (Zero Forced Reflow / Zero Travadas)
+  let currentActiveVideo = null;
+
   function attachStreamToNativePlayer(stream, isLocal = false) {
     if (!stream || typeof document === 'undefined') return;
     if (!isLocal) {
@@ -326,55 +456,58 @@
       window.__localMediaStream = stream;
     }
 
-    // Remove qualquer aviso visual residual no container
-    // FIX 1.1.4: esconde em vez de remover (remover nós do React pode quebrar a renderização)
+    if (currentActiveVideo && currentActiveVideo.isConnected && currentActiveVideo.srcObject === stream) {
+      if (currentActiveVideo.paused) currentActiveVideo.play().catch(() => {});
+      return;
+    }
+
     const staleAlerts = document.querySelectorAll('[class*="streamPaused_"], [class*="videoOverlay_"]');
     staleAlerts.forEach(el => { if (el.style.display !== 'none') el.style.display = 'none'; });
 
-    // Localiza elementos <video> ativos (ignorando tags dummy de 2x2 do Discord)
-    const videoElements = Array.from(document.querySelectorAll('video')).filter(v => {
-      const isDummy = v.width === 2 || v.height === 2 || (v.offsetWidth < 50 && v.offsetHeight < 50 && v.offsetWidth > 0);
-      if (isDummy) return false;
-      // FIX 1.1.4: GIFs e vídeos do chat têm link http(s) próprio. Nunca são o player da live.
-      if (isWebMediaVideo(v)) {
-        if (v.srcObject && v.srcObject === stream) v.srcObject = null;
-        return false;
-      }
-      return true;
-    });
-
-    let attached = false;
+    const videoElements = document.querySelectorAll('video');
     for (const video of videoElements) {
-      if (video) {
-        // FIX 1.1.4: só configura volume quando liga o stream (antes resetava o volume a cada mudança na tela)
-        if (video.srcObject !== stream) {
-          video.srcObject = stream;
-          video.muted = isLocal;
-          video.volume = isLocal ? 0 : 1.0;
-        }
-        if (video.paused) video.play().catch(e => console.warn('[DiscordMod] Video.play aviso:', e));
-        attached = true;
+      if (isWebMediaVideo(video)) continue;
+      if (video.width === 2 || video.height === 2) continue;
+
+      if (video.srcObject !== stream) {
+        video.srcObject = stream;
       }
+      // Garante vídeo 100% mudo no elemento HTML5: o áudio da janela sai exclusivamente na faixa nativa de transmissão do Discord
+      video.muted = true;
+      video.volume = 0;
+      try {
+        video.disablePictureInPicture = true;
+        video.disableRemotePlayback = true;
+      } catch (e) {}
+      if (video.paused) video.play().catch(e => console.warn('[DiscordMod] Video.play aviso:', e));
+      currentActiveVideo = video;
+      return;
     }
 
-    // Se o Discord ainda não montou tag <video> na célula da transmissão, injeta nosso player nativo
-    if (!attached) {
-      const container = document.querySelector('[class*="videoWrapper_"], [class*="videoContainer_"], [class*="tile_"]');
-      if (container) {
-        let player = document.getElementById('zap-custom-video-player');
-        if (!player) {
-          player = document.createElement('video');
-          player.id = 'zap-custom-video-player';
-          player.autoplay = true;
-          player.playsInline = true;
-          player.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:45;';
-          container.appendChild(player);
-        }
-        player.srcObject = stream;
-        player.muted = isLocal;
-        player.volume = isLocal ? 0 : 1.0;
-        player.play().catch(() => {});
+    const container = document.querySelector('[class*="videoWrapper_"], [class*="videoContainer_"], [class*="tile_"]');
+    if (container) {
+      let player = document.getElementById('zap-custom-video-player');
+      if (!player) {
+        player = document.createElement('video');
+        player.id = 'zap-custom-video-player';
+        player.autoplay = true;
+        player.playsInline = true;
+        player.muted = true;
+        player.volume = 0;
+        try {
+          player.disablePictureInPicture = true;
+          player.disableRemotePlayback = true;
+        } catch (e) {}
+        player.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:45;transform:translate3d(0,0,0);will-change:transform;backface-visibility:hidden;';
+        container.appendChild(player);
       }
+      if (player.srcObject !== stream) {
+        player.srcObject = stream;
+      }
+      player.muted = true;
+      player.volume = 0;
+      if (player.paused) player.play().catch(() => {});
+      currentActiveVideo = player;
     }
   }
 
@@ -389,10 +522,10 @@
 
   function detachStreamFromNativePlayer() {
     if (typeof document === 'undefined') return;
-    // FIX 1.1.4: limpa só os vídeos com o stream do mod (ou streams mortos), sem mexer em webcams/GIFs
     const ours = new Set([window.__activeMediaStream, window.__localMediaStream].filter(Boolean));
     window.__activeMediaStream = null;
     window.__localMediaStream = null;
+    currentActiveVideo = null;
     const videoElements = document.querySelectorAll('video');
     for (const video of videoElements) {
       const s = video && video.srcObject;
@@ -404,36 +537,47 @@
       } catch {}
       if (ours.has(s) || dead) {
         video.srcObject = null;
+        video.muted = true;
+        video.volume = 0;
       }
     }
     const customPlayer = document.getElementById('zap-custom-video-player');
     if (customPlayer) customPlayer.remove();
   }
 
-  // Observador contínuo de montagem de nós <video> no DOM (Resiliência a re-render do React)
+  // Observador inteligente: só atua se houver stream ativo e se elementos de vídeo forem adicionados ao DOM
   if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined' && !window.__zapVideoObserver) {
     let zapObserverScheduled = false;
-    window.__zapVideoObserver = new MutationObserver(() => {
-      // FIX 1.1.4: agrupa mutações num frame (antes rodava centenas de vezes por segundo)
-      if (zapObserverScheduled) return;
-      zapObserverScheduled = true;
-      requestAnimationFrame(() => {
-      zapObserverScheduled = false;
+    window.__zapVideoObserver = new MutationObserver((mutations) => {
       const streamToApply = window.__activeMediaStream || window.__localMediaStream;
-      const isLocal = !window.__activeMediaStream && Boolean(window.__localMediaStream);
+      if (!streamToApply) return;
 
-      if (streamToApply) {
-        attachStreamToNativePlayer(streamToApply, isLocal);
+      if (currentActiveVideo && currentActiveVideo.isConnected && currentActiveVideo.srcObject === streamToApply && !currentActiveVideo.paused) {
+        return;
       }
 
-      // Limpeza contínua de banners de Erro 2012 gerados dinamicamente
-      const errorBoxes = document.querySelectorAll('div[role="alert"], [class*="streamPaused_"], div[class*="emptyState_"], div[class*="streamNotice_"]');
-      errorBoxes.forEach(el => {
-        const text = el.textContent || '';
-        if (text.includes('2012') || text.includes('transmissão não iniciou') || el.className?.includes?.('streamPaused_')) {
-          if (el.style.display !== 'none') el.style.display = 'none';
+      let relevant = false;
+      for (const m of mutations) {
+        if (m.addedNodes.length > 0) {
+          for (const n of m.addedNodes) {
+            if (n.nodeType === 1 && (n.nodeName === 'VIDEO' || n.querySelector?.('video, [class*="video"], [class*="tile"]'))) {
+              relevant = true;
+              break;
+            }
+          }
         }
-      });
+        if (relevant) break;
+      }
+
+      if (!relevant || zapObserverScheduled) return;
+      zapObserverScheduled = true;
+
+      requestAnimationFrame(() => {
+        zapObserverScheduled = false;
+        const currentStream = window.__activeMediaStream || window.__localMediaStream;
+        if (currentStream) {
+          attachStreamToNativePlayer(currentStream, !window.__activeMediaStream && Boolean(window.__localMediaStream));
+        }
       });
     });
 
@@ -445,22 +589,7 @@
     }
   }
 
-  // Hook no botão oficial do monitor no painel de voz
-  if (typeof document !== 'undefined' && !window.__zapButtonHookRegistered) {
-    window.__zapButtonHookRegistered = true;
-    document.addEventListener('click', (e) => {
-      const btn = e.target?.closest?.('button[aria-label="Compartilhe sua tela"], button[aria-label="Share Your Screen"], button[aria-label="Compartilhar sua tela"]');
-      if (btn) {
-        const service = window.__zapWebRTCInstance;
-        if (service?.localStream) {
-          service.stopBroadcast();
-          detachStreamFromNativePlayer();
-        }
-      }
-    }, true);
-  }
-
-  // Verificação de sincronização periódica de canal (a cada 2s)
+  // Sincronização periódica leve do canal de voz
   if (typeof setInterval !== 'undefined' && !window.__zapChannelSyncInterval) {
     let lastVoiceChannelId = null;
     window.__zapChannelSyncInterval = setInterval(() => {
@@ -472,21 +601,20 @@
         lastVoiceChannelId = currentChannelId;
         if (service) {
           if (currentChannelId && currentUser) {
-            console.log('[DiscordMod] Canal de voz ativo:', currentChannelId);
             service.subscribeToStream(currentChannelId, currentUser.id);
           } else {
-            console.log('[DiscordMod] Saiu do canal de voz.');
             service.leaveChannel();
             detachStreamFromNativePlayer();
           }
         }
       }
-    }, 2000);
+    }, 10000);
   }
 
   const current = store.getClientOverrides()?.[primaryExperiment];
   const verified = enabled ? current?.variantId === -1 : current == null;
-  if (verified && window.__zapWebRTCInstance && window.__zapDispatcherIntercepted) {
+
+  if (verified) {
     window.__zapReady = true;
     window.__zapStoreRef = store;
     window.__zapAppliedList = appliedList;
