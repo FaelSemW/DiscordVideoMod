@@ -13,8 +13,10 @@
 
 | Arquivo | Tamanho | Descrição | Link Direto |
 | :--- | :--- | :--- | :--- |
-| **`DiscordModInjector.exe`** | **~628 KB** | **Recomendado!** Injeta a versão `v1.1.5` no Discord oficial em menos de 1 segundo. | [**👉 Baixar Injetor v1.1.5 (628 KB)**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordModInjector.exe) |
-| **`RestaurarOriginal.exe`** | ~580 KB | Remove o mod e restaura o Discord original limpo. | [**Baixar Restaurador**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/RestaurarOriginal.exe) |
+| **`DiscordModInjector.exe`** | **~628 KB** | **Recomendado (PC Windows)!** Injeta a versão `v1.1.5` no Discord oficial em menos de 1 segundo. | [**👉 Baixar Injetor v1.1.5 (628 KB)**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordModInjector.exe) |
+| **`DiscordVideoMod.apk`** | **~247 MB** | **Android (v1.1.5-mobile)!** App Discord completo com Player WebRTC 1080p60 P2P e Auto-Update OTA. | [**📱 Baixar APK Android**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordVideoMod.apk) |
+| **`DiscordVideoMod.ipa`** | **~96 MB** | **iPhone / iOS (v1.1.5-mobile)!** Instalador IPA com Player WebRTC 1080p60 P2P e Auto-Update OTA. | [**🍏 Baixar IPA iOS**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordVideoMod.ipa) |
+| **`RestaurarOriginal.exe`** | ~580 KB | Remove o mod no PC e restaura o Discord original limpo. | [**Baixar Restaurador**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/RestaurarOriginal.exe) |
 | **`DiscordLauncher.exe`** | ~292 KB | Inicializador silencioso do cliente modificado. | [**Baixar Launcher**](https://github.com/FaelSemW/DiscordVideoMod/releases/download/v1.1.5/DiscordLauncher.exe) |
 
 ---

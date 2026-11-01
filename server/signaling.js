@@ -117,7 +117,7 @@ const server = http.createServer((req, res) => {
         code = fs.readFileSync(bundlePath, 'utf8');
       }
 
-      let version = '1.1.0-mobile';
+      let version = '1.1.5-mobile';
       const configCandidates = [
         path.join(__dirname, 'mobile', 'config.json'),
         path.join(__dirname, '..', '..', 'mobile', 'config.json'),

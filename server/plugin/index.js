@@ -2,7 +2,7 @@
   const DEFAULT_CONFIG = {
     serverUrl: 'https://discordvideomod.onrender.com',
     updateUrl: 'https://discordvideomod.onrender.com/api/mod/mobile/update',
-    version: '1.1.0-mobile',
+    version: '1.1.5-mobile',
     storageKey: '__DISCORD_MOD_MOBILE_BUNDLE__',
     storageMetaKey: '__DISCORD_MOD_MOBILE_META__'
   };

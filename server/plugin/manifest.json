@@ -1,6 +1,6 @@
 {
   "name": "DiscordVideoMod",
-  "description": "Transmissão e reprodução WebRTC 1080p60 P2P com áudio limpo e Auto-Update OTA (Base 1.1.0)",
+  "description": "Transmissão e reprodução WebRTC 1080p60 P2P com faixas de áudio separadas, zero travadas e Auto-Update OTA (v1.1.5)",
   "authors": [
     {
       "name": "FaelSemW",
@@ -8,7 +8,7 @@
     }
   ],
   "main": "index.js",
-  "version": "1.1.0-mobile",
+  "version": "1.1.5-mobile",
   "hash": "v110-109fc38c7a682aba4de7090324b14f788122a0ae7d7f323c48dd4114db238ce4",
   "vendetta": {
     "icon": "ic_video"
